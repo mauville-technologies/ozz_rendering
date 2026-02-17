@@ -1,0 +1,473 @@
+//
+// Created by paulm on 2026-02-10.
+//
+
+#include <ozz_vk/core.h>
+
+#include <iostream>
+#include <vector>
+
+#include <spdlog/spdlog.h>
+
+#include "ozz_vk/util.h"
+
+static VKAPI_ATTR VkBool32 VKAPI_CALL DebugCallback(VkDebugUtilsMessageSeverityFlagBitsEXT severity,
+                                                    VkDebugUtilsMessageTypeFlagsEXT type,
+                                                    const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData,
+                                                    void* pUserData) {
+
+    switch (severity) {
+        case VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT:
+            // spdlog::error(pCallbackData->pMessage);
+            break;
+        case VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT:
+            spdlog::debug(pCallbackData->pMessage);
+            break;
+        case VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT:
+            spdlog::warn(pCallbackData->pMessage);
+            break;
+        case VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT:
+            spdlog::info(pCallbackData->pMessage);
+            break;
+        default:
+            break;
+    }
+
+    return VK_TRUE;
+}
+
+OZZ::vk::VulkanCore::VulkanCore() {}
+
+OZZ::vk::VulkanCore::~VulkanCore() {
+    queue.WaitIdle();
+    queue.Destroy();
+
+    vkDestroyCommandPool(device, commandBufferPool, nullptr);
+    spdlog::info("Destroyed command buffer pool");
+
+    for (auto framebuffer : framebuffers) {
+        vkDestroyFramebuffer(device, framebuffer, nullptr);
+    }
+    spdlog::info("Destroyed framebuffers");
+
+    for (auto imageView : swapchainImageViews) {
+        vkDestroyImageView(device, imageView, nullptr);
+    }
+
+    vkDestroySwapchainKHR(device, swapchain, nullptr);
+    spdlog::info("Swapchain destroyed");
+
+    vkDestroyDevice(device, nullptr);
+    spdlog::info("Logical device destroyed");
+
+    vkDestroySurfaceKHR(instance, surface, nullptr);
+    spdlog::info("Surface destroyed");
+
+    PFN_vkDestroyDebugUtilsMessengerEXT vkDestroyUtilsMessenger = VK_NULL_HANDLE;
+    vkDestroyUtilsMessenger = reinterpret_cast<PFN_vkDestroyDebugUtilsMessengerEXT>(
+        vkGetInstanceProcAddr(instance, "vkDestroyDebugUtilsMessengerEXT"));
+    if (!vkDestroyUtilsMessenger) {
+        spdlog::error("Could not find create debug messenger address");
+        exit(1);
+    }
+
+    vkDestroyUtilsMessenger(instance, debugMessenger, nullptr);
+    spdlog::info("Vulkan debug messenger destroyed");
+
+    vkDestroyInstance(instance, nullptr);
+    spdlog::info("Vulkan instance destroyed");
+}
+
+void OZZ::vk::VulkanCore::Init(const InitParams& initParams) {
+    createInstance(initParams.AppName);
+    createDebugCallback();
+    createSurface(initParams.SurfaceCreationFunction);
+
+    physicalDevices.Init(instance, surface);
+    queueFamily = physicalDevices.SelectDevice(VK_QUEUE_GRAPHICS_BIT, true);
+    createDevice();
+    createSwapchain();
+    createCommandBufferPool();
+
+    queue.Init(device, swapchain, queueFamily, 0);
+}
+
+void OZZ::vk::VulkanCore::CreateCommandBuffers(const uint32_t numberOfCommandBuffers, VkCommandBuffer* commandBuffers) {
+    VkCommandBufferAllocateInfo commandBufferAllocateInfo {
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+        .pNext = nullptr,
+        .commandPool = commandBufferPool,
+        .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+        .commandBufferCount = numberOfCommandBuffers,
+    };
+
+    const auto result = vkAllocateCommandBuffers(device, &commandBufferAllocateInfo, commandBuffers);
+    CHECK_VK_RESULT(result, "Allocate command buffers");
+    spdlog::info("{} command buffers created", numberOfCommandBuffers);
+}
+
+void OZZ::vk::VulkanCore::FreeCommandBuffers(uint32_t numberOfCommandBuffers, VkCommandBuffer* buffers) {
+    queue.WaitIdle();
+    vkFreeCommandBuffers(device, commandBufferPool, numberOfCommandBuffers, buffers);
+}
+
+VkRenderPass OZZ::vk::VulkanCore::CreateSimpleRenderPass() {
+    VkAttachmentDescription attachmentDescription {
+        .flags = 0,
+        .format = surfaceFormat.format,
+        .samples = VK_SAMPLE_COUNT_1_BIT,
+        .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+        .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+        .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+        .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+        .finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+    };
+
+    VkAttachmentReference attachmentReference {
+        .attachment = 0,
+        .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+    };
+
+    VkSubpassDescription subpassDescription {
+        .flags = 0,
+        .pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
+        .inputAttachmentCount = 0,
+        .pInputAttachments = nullptr,
+        .colorAttachmentCount = 1,
+        .pColorAttachments = &attachmentReference,
+        .pResolveAttachments = nullptr,
+        .pDepthStencilAttachment = nullptr,
+        .preserveAttachmentCount = 0,
+        .pPreserveAttachments = nullptr,
+    };
+
+    VkRenderPassCreateInfo renderPassCreateInfo {
+        .sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .attachmentCount = 1,
+        .pAttachments = &attachmentDescription,
+        .subpassCount = 1,
+        .pSubpasses = &subpassDescription,
+        .dependencyCount = 0,
+        .pDependencies = nullptr,
+    };
+
+    VkRenderPass renderPass;
+    const auto result = vkCreateRenderPass(device, &renderPassCreateInfo, nullptr, &renderPass);
+    CHECK_VK_RESULT(result, "Create render pass");
+    spdlog::info("Created simple render pass");
+    return renderPass;
+}
+
+std::vector<VkFramebuffer>
+OZZ::vk::VulkanCore::CreateFramebuffers(const VkRenderPass renderPass,
+                                        const std::function<std::pair<int, int>()>& frameBufferSizeFunc) {
+
+    framebuffers.resize(swapchainImages.size());
+    auto [width, height] = frameBufferSizeFunc();
+
+    for (auto i = 0U; i < swapchainImages.size(); i++) {
+        VkFramebufferCreateInfo framebufferCreateInfo {
+            .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .renderPass = renderPass,
+            .attachmentCount = 1,
+            .pAttachments = &swapchainImageViews[i],
+            .width = static_cast<uint32_t>(width),
+            .height = static_cast<uint32_t>(height),
+            .layers = 1,
+        };
+
+        VkResult result = vkCreateFramebuffer(device, &framebufferCreateInfo, nullptr, &framebuffers[i]);
+        CHECK_VK_RESULT(result, "Create frame buffer");
+    }
+
+    spdlog::info("Framebuffers created");
+    return framebuffers;
+}
+
+uint32_t OZZ::vk::VulkanCore::GetSwapchainImageCount() const {
+    return swapchainImages.size();
+}
+
+VkImage OZZ::vk::VulkanCore::GetSwapchainImage(const uint32_t imageIndex) const {
+    return swapchainImages[imageIndex];
+}
+
+OZZ::vk::VulkanQueue* OZZ::vk::VulkanCore::GetQueue() {
+    return &queue;
+}
+
+void OZZ::vk::VulkanCore::createInstance(const std::string& appName) {
+    std::vector<const char*> layers {
+        // Going to use configurator for validation layers -- uncomment if it's not working
+        // "VK_LAYER_KHRONOS_validation"
+    };
+    std::vector<const char*> enabledExtensions {
+        VK_KHR_SURFACE_EXTENSION_NAME,
+#ifdef _WIN32
+        "VK_KHR_win32_surface",
+#endif
+#ifdef __APPLE__
+        "VK_MVK_macos_surface",
+#endif
+        VK_EXT_DEBUG_UTILS_EXTENSION_NAME,
+    };
+
+#ifdef __linux__
+    // runtime fallback: prefer Wayland if WAYLAND_DISPLAY present, else X11 if DISPLAY present
+    if (std::getenv("WAYLAND_DISPLAY")) {
+        enabledExtensions.push_back("VK_KHR_wayland_surface");
+    } else if (std::getenv("DISPLAY")) {
+        enabledExtensions.push_back("VK_KHR_xcb_surface");
+    }
+#endif
+
+    VkApplicationInfo appInfo {
+        .sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
+        .pApplicationName = appName.c_str(),
+        .applicationVersion = VK_MAKE_API_VERSION(0, 1, 0, 0),
+        .pEngineName = "OZZ Engine",
+        .engineVersion = VK_MAKE_API_VERSION(0, 1, 0, 0),
+        .apiVersion = VK_API_VERSION_1_0,
+    };
+
+    VkInstanceCreateInfo createInfo {
+        .sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
+        .flags = 0,
+        .pApplicationInfo = &appInfo,
+        .enabledLayerCount = static_cast<uint32_t>(layers.size()),
+        .ppEnabledLayerNames = layers.data(),
+        .enabledExtensionCount = static_cast<uint32_t>(enabledExtensions.size()),
+        .ppEnabledExtensionNames = enabledExtensions.data(),
+    };
+
+    const auto result = vkCreateInstance(&createInfo, nullptr, &instance);
+    CHECK_VK_RESULT(result, "Create Instance");
+
+    spdlog::info("Vulkan instance created.");
+}
+
+void OZZ::vk::VulkanCore::createDebugCallback() {
+    VkDebugUtilsMessengerCreateInfoEXT messengerCreateInfo {
+        .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT,
+        .messageSeverity =
+            VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT |
+            VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT,
+        .messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
+                       VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT |
+                       VK_DEBUG_UTILS_MESSAGE_TYPE_DEVICE_ADDRESS_BINDING_BIT_EXT,
+        .pfnUserCallback = &DebugCallback,
+        .pUserData = this,
+    };
+
+    PFN_vkCreateDebugUtilsMessengerEXT vkCreateUtilsMessenger = VK_NULL_HANDLE;
+    vkCreateUtilsMessenger = reinterpret_cast<PFN_vkCreateDebugUtilsMessengerEXT>(
+        vkGetInstanceProcAddr(instance, "vkCreateDebugUtilsMessengerEXT"));
+    if (!vkCreateUtilsMessenger) {
+        spdlog::error("Could not find create debug messenger address");
+        exit(1);
+    }
+
+    auto result = vkCreateUtilsMessenger(instance, &messengerCreateInfo, nullptr, &debugMessenger);
+    CHECK_VK_RESULT(result, "Debug messenger creation");
+    spdlog::info("Debug messenger created");
+}
+
+void OZZ::vk::VulkanCore::createSurface(const std::function<int(VkInstance, VkSurfaceKHR*)>& function) {
+
+    auto result = function(instance, &surface);
+    CHECK_VK_RESULT(static_cast<VkResult>(result), "Create surface");
+    spdlog::info("Surface created successfully");
+}
+
+void OZZ::vk::VulkanCore::createDevice() {
+    float queuePriorities[] = {1.f};
+
+    VkDeviceQueueCreateInfo queueCreateInfo {
+        .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+        .flags = 0,
+        .queueFamilyIndex = queueFamily,
+        .queueCount = 1,
+        .pQueuePriorities = queuePriorities,
+    };
+
+    std::vector<const char*> deviceExtensions {
+        VK_KHR_SWAPCHAIN_EXTENSION_NAME,
+        VK_KHR_SHADER_DRAW_PARAMETERS_EXTENSION_NAME,
+    };
+
+    if (physicalDevices.Selected().Features.geometryShader == VK_FALSE) {
+        spdlog::error("Geometry shaders not supported on selected physical device");
+        exit(1);
+    }
+    if (physicalDevices.Selected().Features.tessellationShader == VK_FALSE) {
+        spdlog::error("Tesselation shaders not supported on selected physical device");
+        exit(1);
+    }
+    VkPhysicalDeviceFeatures deviceFeatures {
+        .geometryShader = VK_TRUE,
+        .tessellationShader = VK_TRUE,
+    };
+
+    const VkDeviceCreateInfo deviceCreateInfo {
+        .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
+        .flags = 0,
+        .queueCreateInfoCount = 1,
+        .pQueueCreateInfos = &queueCreateInfo,
+        .enabledExtensionCount = static_cast<uint32_t>(deviceExtensions.size()),
+        .ppEnabledExtensionNames = deviceExtensions.data(),
+        .pEnabledFeatures = &deviceFeatures,
+    };
+    const auto result = vkCreateDevice(physicalDevices.Selected().Device, &deviceCreateInfo, nullptr, &device);
+    CHECK_VK_RESULT(result, "create logical device");
+
+    spdlog::info("Logical device created");
+}
+
+void OZZ::vk::VulkanCore::createSwapchain() {
+    const VkSurfaceCapabilitiesKHR& surfaceCapabilities = physicalDevices.Selected().SurfaceCapabilities;
+    const uint32_t numImages = chooseNumberOfSwapchainImages(surfaceCapabilities);
+
+    const std::vector<VkPresentModeKHR>& presentModes = physicalDevices.Selected().PresentModes;
+    VkPresentModeKHR presentMode = choosePresentMode(presentModes);
+    surfaceFormat = chooseSurfaceFormatAndColorSpace(physicalDevices.Selected().SurfaceFormats);
+
+    VkSwapchainCreateInfoKHR swapchainCreateInfo {
+        .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
+        .flags = 0,
+        .surface = surface,
+        .minImageCount = numImages,
+        .imageFormat = surfaceFormat.format,
+        .imageColorSpace = surfaceFormat.colorSpace,
+        .imageExtent = surfaceCapabilities.currentExtent,
+        .imageArrayLayers = 1,
+        .imageUsage = (VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT),
+        .imageSharingMode = VK_SHARING_MODE_EXCLUSIVE,
+        .queueFamilyIndexCount = 1,
+        .pQueueFamilyIndices = &queueFamily,
+        .preTransform = surfaceCapabilities.currentTransform,
+        .compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
+        .presentMode = presentMode,
+        .clipped = VK_TRUE,
+    };
+
+    auto result = vkCreateSwapchainKHR(device, &swapchainCreateInfo, nullptr, &swapchain);
+    CHECK_VK_RESULT(result, "Create swapchain");
+
+    spdlog::info("Swapchain created");
+
+    uint32_t numSwapchainImages = 0;
+    result = vkGetSwapchainImagesKHR(device, swapchain, &numSwapchainImages, nullptr);
+    CHECK_VK_RESULT(result, "Get swapchain image count");
+    if (numImages != numSwapchainImages) {
+        spdlog::error("Swapchain image count mismatch!");
+    }
+
+    spdlog::info("Num swapchain images: {}", numSwapchainImages);
+    swapchainImages.resize(numSwapchainImages);
+    swapchainImageViews.resize(numSwapchainImages);
+
+    result = vkGetSwapchainImagesKHR(device, swapchain, &numSwapchainImages, swapchainImages.data());
+    CHECK_VK_RESULT(result, "Get swapchain images");
+
+    int layerCount = 1;
+    int mipLevels = 1;
+    for (auto i = 0; i < numSwapchainImages; i++) {
+        swapchainImageViews[i] = createImageView(device,
+                                                 swapchainImages[i],
+                                                 surfaceFormat.format,
+                                                 VK_IMAGE_ASPECT_COLOR_BIT,
+                                                 VK_IMAGE_VIEW_TYPE_2D,
+                                                 layerCount,
+                                                 mipLevels);
+    }
+}
+
+void OZZ::vk::VulkanCore::createCommandBufferPool() {
+    VkCommandPoolCreateInfo commandPoolCreateInfo {
+        .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .queueFamilyIndex = queueFamily,
+    };
+
+    const auto result = vkCreateCommandPool(device, &commandPoolCreateInfo, nullptr, &commandBufferPool);
+    CHECK_VK_RESULT(result, "Create command buffer pool");
+    spdlog::info("create command buffer pool");
+}
+
+uint32_t OZZ::vk::VulkanCore::chooseNumberOfSwapchainImages(const VkSurfaceCapabilitiesKHR& capabilities) {
+    uint32_t requestedNumImages = capabilities.minImageCount + 1;
+
+    uint32_t finalNumberOfImages = 0;
+    if (capabilities.maxImageCount > 0 && requestedNumImages > capabilities.maxImageCount) {
+        finalNumberOfImages = capabilities.maxImageCount;
+    } else {
+        finalNumberOfImages = requestedNumImages;
+    }
+
+    return finalNumberOfImages;
+}
+
+VkPresentModeKHR OZZ::vk::VulkanCore::choosePresentMode(const std::vector<VkPresentModeKHR>& presentModes) {
+    for (const auto presentMode : presentModes) {
+        if (presentMode == VK_PRESENT_MODE_MAILBOX_KHR) {
+            return presentMode;
+        }
+    }
+
+    return VK_PRESENT_MODE_FIFO_KHR;
+}
+
+VkSurfaceFormatKHR
+OZZ::vk::VulkanCore::chooseSurfaceFormatAndColorSpace(const std::vector<VkSurfaceFormatKHR>& surfaceFormats) {
+    for (const auto format : surfaceFormats) {
+        if (format.format == VK_FORMAT_B8G8R8A8_SRGB && format.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
+            return format;
+        }
+    }
+
+    return surfaceFormats[0];
+}
+
+VkImageView OZZ::vk::VulkanCore::createImageView(VkDevice device,
+                                                 VkImage swapchainImage,
+                                                 VkFormat format,
+                                                 VkImageAspectFlags imageAspectFlags,
+                                                 VkImageViewType imageViewType,
+                                                 uint32_t layerCount,
+                                                 uint32_t mipLevels) {
+    VkImageViewCreateInfo imageViewCreateInfo {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .image = swapchainImage,
+        .viewType = imageViewType,
+        .format = format,
+        .components =
+            {
+                .r = VK_COMPONENT_SWIZZLE_IDENTITY,
+                .g = VK_COMPONENT_SWIZZLE_IDENTITY,
+                .b = VK_COMPONENT_SWIZZLE_IDENTITY,
+                .a = VK_COMPONENT_SWIZZLE_IDENTITY,
+            },
+        .subresourceRange =
+            {
+                .aspectMask = imageAspectFlags,
+                .baseMipLevel = 0,
+                .levelCount = mipLevels,
+                .baseArrayLayer = 0,
+                .layerCount = layerCount,
+            },
+    };
+
+    VkImageView imageView;
+    const auto result = vkCreateImageView(device, &imageViewCreateInfo, nullptr, &imageView);
+    CHECK_VK_RESULT(result, "create image view");
+
+    return imageView;
+}
