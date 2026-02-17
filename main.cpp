@@ -6,7 +6,10 @@
 #include "ozz_vk/core.h"
 #include "ozz_vk/util.h"
 #include "ozz_vk/vulkan_queue.h"
+#include "ozz_vk/vulkan_shader.h"
 #include "spdlog/spdlog.h"
+
+#include <filesystem>
 
 #define WINDOW_WIDTH 800
 #define WINDOW_HEIGHT 600
@@ -32,6 +35,13 @@ public:
         numSwapchainImages = vkCore.GetSwapchainImageCount();
         createCommandBuffers();
         recordCommandBuffers();
+
+        std::filesystem::path base = std::filesystem::current_path() / "assets" / "shaders" / "basic";
+        vulkanShader = std::make_unique<OZZ::vk::VulkanShader>(vkCore.GetDevice(),
+                                                               OZZ::vk::ShaderFileParams {
+                                                                   .Vertex = base / "basic.vert",
+                                                                   .Fragment = base / "basic.frag",
+                                                               });
     }
 
     void Render() {
@@ -175,6 +185,8 @@ private:
     OZZ::vk::VulkanCore vkCore;
     OZZ::vk::VulkanQueue* queue {nullptr};
     uint32_t numSwapchainImages = 0;
+
+    std::unique_ptr<OZZ::vk::VulkanShader> vulkanShader;
     std::vector<VkCommandBuffer> commandBuffers {};
 
     std::vector<VkFramebuffer> framebuffers;

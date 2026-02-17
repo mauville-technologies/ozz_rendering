@@ -218,6 +218,8 @@ void OZZ::vk::VulkanCore::createDevice() {
 
     std::vector<const char*> deviceExtensions {
         VK_KHR_SWAPCHAIN_EXTENSION_NAME,
+        VK_EXT_SHADER_OBJECT_EXTENSION_NAME,
+        VK_EXT_VERTEX_INPUT_DYNAMIC_STATE_EXTENSION_NAME,
     };
 
     if (physicalDevices.Selected().Features.features.geometryShader == VK_FALSE) {
@@ -229,11 +231,18 @@ void OZZ::vk::VulkanCore::createDevice() {
         exit(1);
     }
 
+    VkPhysicalDeviceShaderObjectFeaturesEXT shaderObjectFeatures {
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_OBJECT_FEATURES_EXT,
+        .pNext = nullptr,
+        .shaderObject = VK_TRUE,
+    };
+
     VkPhysicalDeviceDynamicRenderingFeatures renderingFeatures {
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES,
-        .pNext = nullptr,
+        .pNext = &shaderObjectFeatures,
         .dynamicRendering = VK_TRUE,
     };
+
     VkPhysicalDeviceFeatures2 deviceFeatures {
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
         .pNext = &renderingFeatures,
