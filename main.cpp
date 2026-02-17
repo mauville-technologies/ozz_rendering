@@ -17,10 +17,7 @@ class App {
 public:
     App() {};
 
-    ~App() {
-        vkCore.FreeCommandBuffers(commandBuffers.size(), commandBuffers.data());
-        vkDestroyRenderPass(vkCore.GetDevice(), renderPass, nullptr);
-    }
+    ~App() { vkCore.FreeCommandBuffers(commandBuffers.size(), commandBuffers.data()); }
 
     void Init(const std::string& appName, GLFWwindow* window) {
         vkCore.Init({
@@ -31,12 +28,6 @@ public:
                 },
         });
         queue = vkCore.GetQueue();
-        renderPass = vkCore.CreateSimpleRenderPass();
-        framebuffers = vkCore.CreateFramebuffers(renderPass, [window]() {
-            int width, height;
-            glfwGetFramebufferSize(window, &width, &height);
-            return std::pair<int, int>(width, height);
-        });
 
         numSwapchainImages = vkCore.GetSwapchainImageCount();
         createCommandBuffers();
@@ -61,41 +52,117 @@ private:
             1.f,
             0.f,
             0.f,
-            0.f,
+            1.f,
         };
 
         VkClearValue clearValue;
         clearValue.color = clearColor;
 
-        VkRenderPassBeginInfo renderPassBeginInfo {
-            .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+        VkImageMemoryBarrier presentToClearBarrier {
+            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
             .pNext = nullptr,
-            .renderPass = renderPass,
-            .framebuffer = VK_NULL_HANDLE,
-            .renderArea =
+            .srcAccessMask = 0,
+            .dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+            .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+            .newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .image = VK_NULL_HANDLE,
+            .subresourceRange =
                 {
-                    .offset =
-                        {
-                            .x = 0,
-                            .y = 0,
-                        },
-                    .extent =
-                        {
-                            .width = WINDOW_WIDTH,
-                            .height = WINDOW_HEIGHT,
-                        },
+                    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                    .baseMipLevel = 0,
+                    .levelCount = 1,
+                    .baseArrayLayer = 0,
+                    .layerCount = 1,
                 },
-            .clearValueCount = 1,
-            .pClearValues = &clearValue,
         };
 
+        VkImageMemoryBarrier clearToPresentImageBarrier {
+            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+            .pNext = nullptr,
+            .srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+            .dstAccessMask = 0,
+            .oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+            .newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .image = VK_NULL_HANDLE,
+            .subresourceRange =
+                {
+                    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                    .baseMipLevel = 0,
+                    .levelCount = 1,
+                    .baseArrayLayer = 0,
+                    .layerCount = 1,
+                },
+        };
         int i = 0;
         for (const auto commandBuffer : commandBuffers) {
             OZZ::vk::BeginCommandBuffer(commandBuffer, 0);
-            renderPassBeginInfo.framebuffer = framebuffers[i];
-            vkCmdBeginRenderPass(commandBuffer, &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
 
-            vkCmdEndRenderPass(commandBuffer);
+            presentToClearBarrier.image = vkCore.GetSwapchainImage(i);
+
+            vkCmdPipelineBarrier(commandBuffer,
+                                 VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                                 VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                                 0,
+                                 0,
+                                 nullptr,
+                                 0,
+                                 nullptr,
+                                 1,
+                                 &presentToClearBarrier);
+
+            // transition to color attachment optimal
+            VkRenderingAttachmentInfo colorAttachment {
+                .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+                .pNext = nullptr,
+                .imageView = vkCore.GetSwapchainImageView(i),
+                .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+                .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+                .clearValue = clearValue,
+            };
+            VkRenderingInfo renderingInfo {
+                .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
+                .pNext = nullptr,
+                .flags = 0,
+                .renderArea =
+                    {
+                        .offset =
+                            {
+                                .x = 0,
+                                .y = 0,
+                            },
+                        .extent =
+                            {
+                                .width = WINDOW_WIDTH,
+                                .height = WINDOW_HEIGHT,
+                            },
+                    },
+                .layerCount = 1,
+                .colorAttachmentCount = 1,
+                .pColorAttachments = &colorAttachment,
+                .pDepthAttachment = nullptr,
+                .pStencilAttachment = nullptr,
+            };
+            vkCmdBeginRendering(commandBuffer, &renderingInfo);
+
+            vkCmdEndRendering(commandBuffer);
+
+            clearToPresentImageBarrier.image = vkCore.GetSwapchainImage(i);
+
+            vkCmdPipelineBarrier(commandBuffer,
+                                 VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                                 VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+                                 0,
+                                 0,
+                                 nullptr,
+                                 0,
+                                 nullptr,
+                                 1,
+                                 &clearToPresentImageBarrier);
             const auto result = vkEndCommandBuffer(commandBuffer);
             CHECK_VK_RESULT(result, "End command buffer");
             i++;
@@ -110,7 +177,6 @@ private:
     uint32_t numSwapchainImages = 0;
     std::vector<VkCommandBuffer> commandBuffers {};
 
-    VkRenderPass renderPass;
     std::vector<VkFramebuffer> framebuffers;
 };
 

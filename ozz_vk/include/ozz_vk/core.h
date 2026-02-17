@@ -25,12 +25,10 @@ namespace OZZ::vk {
         void Init(const InitParams& initParams);
         void CreateCommandBuffers(uint32_t numberOfCommandBuffers, VkCommandBuffer* commandBuffers);
         void FreeCommandBuffers(uint32_t numberOfCommandBuffers, VkCommandBuffer* buffers);
-        VkRenderPass CreateSimpleRenderPass();
-        std::vector<VkFramebuffer> CreateFramebuffers(VkRenderPass renderPass,
-                                                      const std::function<std::pair<int, int>()>& frameBufferSizeFunc);
 
         [[nodiscard]] uint32_t GetSwapchainImageCount() const;
         [[nodiscard]] VkImage GetSwapchainImage(uint32_t imageIndex) const;
+        [[nodiscard]] VkImageView GetSwapchainImageView(uint32_t imageIndex) const;
 
         [[nodiscard]] VkDevice GetDevice() const { return device; }
 
@@ -71,7 +69,6 @@ namespace OZZ::vk {
 
         std::vector<VkImage> swapchainImages;
         std::vector<VkImageView> swapchainImageViews;
-        std::vector<VkFramebuffer> framebuffers;
 
         VkCommandPool commandBufferPool;
         VulkanQueue queue;

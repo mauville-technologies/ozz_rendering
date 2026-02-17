@@ -45,11 +45,6 @@ OZZ::vk::VulkanCore::~VulkanCore() {
     vkDestroyCommandPool(device, commandBufferPool, nullptr);
     spdlog::info("Destroyed command buffer pool");
 
-    for (auto framebuffer : framebuffers) {
-        vkDestroyFramebuffer(device, framebuffer, nullptr);
-    }
-    spdlog::info("Destroyed framebuffers");
-
     for (auto imageView : swapchainImageViews) {
         vkDestroyImageView(device, imageView, nullptr);
     }
@@ -111,90 +106,16 @@ void OZZ::vk::VulkanCore::FreeCommandBuffers(uint32_t numberOfCommandBuffers, Vk
     vkFreeCommandBuffers(device, commandBufferPool, numberOfCommandBuffers, buffers);
 }
 
-VkRenderPass OZZ::vk::VulkanCore::CreateSimpleRenderPass() {
-    VkAttachmentDescription attachmentDescription {
-        .flags = 0,
-        .format = surfaceFormat.format,
-        .samples = VK_SAMPLE_COUNT_1_BIT,
-        .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
-        .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
-        .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
-        .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
-        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-        .finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-    };
-
-    VkAttachmentReference attachmentReference {
-        .attachment = 0,
-        .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-    };
-
-    VkSubpassDescription subpassDescription {
-        .flags = 0,
-        .pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
-        .inputAttachmentCount = 0,
-        .pInputAttachments = nullptr,
-        .colorAttachmentCount = 1,
-        .pColorAttachments = &attachmentReference,
-        .pResolveAttachments = nullptr,
-        .pDepthStencilAttachment = nullptr,
-        .preserveAttachmentCount = 0,
-        .pPreserveAttachments = nullptr,
-    };
-
-    VkRenderPassCreateInfo renderPassCreateInfo {
-        .sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
-        .pNext = nullptr,
-        .flags = 0,
-        .attachmentCount = 1,
-        .pAttachments = &attachmentDescription,
-        .subpassCount = 1,
-        .pSubpasses = &subpassDescription,
-        .dependencyCount = 0,
-        .pDependencies = nullptr,
-    };
-
-    VkRenderPass renderPass;
-    const auto result = vkCreateRenderPass(device, &renderPassCreateInfo, nullptr, &renderPass);
-    CHECK_VK_RESULT(result, "Create render pass");
-    spdlog::info("Created simple render pass");
-    return renderPass;
-}
-
-std::vector<VkFramebuffer>
-OZZ::vk::VulkanCore::CreateFramebuffers(const VkRenderPass renderPass,
-                                        const std::function<std::pair<int, int>()>& frameBufferSizeFunc) {
-
-    framebuffers.resize(swapchainImages.size());
-    auto [width, height] = frameBufferSizeFunc();
-
-    for (auto i = 0U; i < swapchainImages.size(); i++) {
-        VkFramebufferCreateInfo framebufferCreateInfo {
-            .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
-            .pNext = nullptr,
-            .flags = 0,
-            .renderPass = renderPass,
-            .attachmentCount = 1,
-            .pAttachments = &swapchainImageViews[i],
-            .width = static_cast<uint32_t>(width),
-            .height = static_cast<uint32_t>(height),
-            .layers = 1,
-        };
-
-        VkResult result = vkCreateFramebuffer(device, &framebufferCreateInfo, nullptr, &framebuffers[i]);
-        CHECK_VK_RESULT(result, "Create frame buffer");
-    }
-
-    spdlog::info("Framebuffers created");
-    return framebuffers;
-}
-
 uint32_t OZZ::vk::VulkanCore::GetSwapchainImageCount() const {
     return swapchainImages.size();
 }
 
 VkImage OZZ::vk::VulkanCore::GetSwapchainImage(const uint32_t imageIndex) const {
     return swapchainImages[imageIndex];
+}
+
+VkImageView OZZ::vk::VulkanCore::GetSwapchainImageView(uint32_t imageIndex) const {
+    return swapchainImageViews[imageIndex];
 }
 
 OZZ::vk::VulkanQueue* OZZ::vk::VulkanCore::GetQueue() {
@@ -232,7 +153,7 @@ void OZZ::vk::VulkanCore::createInstance(const std::string& appName) {
         .applicationVersion = VK_MAKE_API_VERSION(0, 1, 0, 0),
         .pEngineName = "OZZ Engine",
         .engineVersion = VK_MAKE_API_VERSION(0, 1, 0, 0),
-        .apiVersion = VK_API_VERSION_1_0,
+        .apiVersion = VK_API_VERSION_1_3,
     };
 
     VkInstanceCreateInfo createInfo {
@@ -297,30 +218,41 @@ void OZZ::vk::VulkanCore::createDevice() {
 
     std::vector<const char*> deviceExtensions {
         VK_KHR_SWAPCHAIN_EXTENSION_NAME,
-        VK_KHR_SHADER_DRAW_PARAMETERS_EXTENSION_NAME,
     };
 
-    if (physicalDevices.Selected().Features.geometryShader == VK_FALSE) {
+    if (physicalDevices.Selected().Features.features.geometryShader == VK_FALSE) {
         spdlog::error("Geometry shaders not supported on selected physical device");
         exit(1);
     }
-    if (physicalDevices.Selected().Features.tessellationShader == VK_FALSE) {
+    if (physicalDevices.Selected().Features.features.tessellationShader == VK_FALSE) {
         spdlog::error("Tesselation shaders not supported on selected physical device");
         exit(1);
     }
-    VkPhysicalDeviceFeatures deviceFeatures {
-        .geometryShader = VK_TRUE,
-        .tessellationShader = VK_TRUE,
+
+    VkPhysicalDeviceDynamicRenderingFeatures renderingFeatures {
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES,
+        .pNext = nullptr,
+        .dynamicRendering = VK_TRUE,
+    };
+    VkPhysicalDeviceFeatures2 deviceFeatures {
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
+        .pNext = &renderingFeatures,
+        .features =
+            VkPhysicalDeviceFeatures {
+                .geometryShader = VK_TRUE,
+                .tessellationShader = VK_TRUE,
+            },
     };
 
     const VkDeviceCreateInfo deviceCreateInfo {
         .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
+        .pNext = &deviceFeatures,
         .flags = 0,
         .queueCreateInfoCount = 1,
         .pQueueCreateInfos = &queueCreateInfo,
         .enabledExtensionCount = static_cast<uint32_t>(deviceExtensions.size()),
         .ppEnabledExtensionNames = deviceExtensions.data(),
-        .pEnabledFeatures = &deviceFeatures,
+        .pEnabledFeatures = nullptr,
     };
     const auto result = vkCreateDevice(physicalDevices.Selected().Device, &deviceCreateInfo, nullptr, &device);
     CHECK_VK_RESULT(result, "create logical device");

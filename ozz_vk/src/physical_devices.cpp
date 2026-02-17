@@ -28,10 +28,10 @@ void PhysicalDevices::Init(const VkInstance& instance, const VkSurfaceKHR& surfa
 
     for (auto&& [vkDevice, physicalDevice] : std::ranges::views::zip(vulkanDevices, devices)) {
         physicalDevice.Device = vkDevice;
-        vkGetPhysicalDeviceProperties(vkDevice, &physicalDevice.Properties);
+        vkGetPhysicalDeviceProperties2(vkDevice, &physicalDevice.Properties);
 
-        spdlog::info("Device name: {}", physicalDevice.Properties.deviceName);
-        const auto apiVersion = physicalDevice.Properties.apiVersion;
+        spdlog::info("Device name: {}", physicalDevice.Properties.properties.deviceName);
+        const auto apiVersion = physicalDevice.Properties.properties.apiVersion;
         spdlog::info("\t\t API VERSION: {}.{}.{}.{}",
                      VK_API_VERSION_VARIANT(apiVersion),
                      VK_API_VERSION_MAJOR(apiVersion),
@@ -39,21 +39,25 @@ void PhysicalDevices::Init(const VkInstance& instance, const VkSurfaceKHR& surfa
                      VK_API_VERSION_PATCH(apiVersion));
 
         uint32_t numQueueFamilies {0};
-        vkGetPhysicalDeviceQueueFamilyProperties(vkDevice, &numQueueFamilies, nullptr);
+        vkGetPhysicalDeviceQueueFamilyProperties2(vkDevice, &numQueueFamilies, nullptr);
         spdlog::info("Number of queue families: {}", numQueueFamilies);
 
-        physicalDevice.QueueFamilyProperties.resize(numQueueFamilies);
+        physicalDevice.QueueFamilyProperties.resize(numQueueFamilies,
+                                                    {
+                                                        .sType = VK_STRUCTURE_TYPE_QUEUE_FAMILY_PROPERTIES_2,
+                                                    });
+
         physicalDevice.QueueSupportsPresent.resize(numQueueFamilies);
-        vkGetPhysicalDeviceQueueFamilyProperties(vkDevice,
-                                                 &numQueueFamilies,
-                                                 physicalDevice.QueueFamilyProperties.data());
+        vkGetPhysicalDeviceQueueFamilyProperties2(vkDevice,
+                                                  &numQueueFamilies,
+                                                  physicalDevice.QueueFamilyProperties.data());
 
         auto i = 0u;
         for (auto&& [queueFamily, supportsPresent] :
              std::ranges::views::zip(physicalDevice.QueueFamilyProperties, physicalDevice.QueueSupportsPresent)) {
-            spdlog::info("Family: {} | Num Queues: {}", i, queueFamily.queueCount);
+            spdlog::info("Family: {} | Num Queues: {}", i, queueFamily.queueFamilyProperties.queueCount);
 
-            VkQueueFlags flags = queueFamily.queueFlags;
+            VkQueueFlags flags = queueFamily.queueFamilyProperties.queueFlags;
             spdlog::info("\t\tGFX {}, Compute {}, Transfer {}, Sparse binding {}",
                          (flags & VK_QUEUE_GRAPHICS_BIT) ? "Yes" : "No",
                          (flags & VK_QUEUE_COMPUTE_BIT) ? "Yes" : "No",
@@ -94,19 +98,20 @@ void PhysicalDevices::Init(const VkInstance& instance, const VkSurfaceKHR& surfa
         CHECK_VK_RESULT(result, "Get presentation modes");
         spdlog::info("Num presentation modes: {}", numPresentationModes);
 
-        vkGetPhysicalDeviceMemoryProperties(vkDevice, &physicalDevice.MemoryProperties);
-        spdlog::info("Num memory types {}", physicalDevice.MemoryProperties.memoryTypeCount);
+        vkGetPhysicalDeviceMemoryProperties2(vkDevice, &physicalDevice.MemoryProperties);
+        spdlog::info("Num memory types {}", physicalDevice.MemoryProperties.memoryProperties.memoryTypeCount);
 
-        for (auto j = 0U; j < physicalDevice.MemoryProperties.memoryTypeCount; j++) {
-            spdlog::info("{}: flags {:X} heap {}",
-                         j,
-                         static_cast<uint32_t>(physicalDevice.MemoryProperties.memoryTypes[j].propertyFlags),
-                         physicalDevice.MemoryProperties.memoryTypes[j].heapIndex);
+        for (auto j = 0U; j < physicalDevice.MemoryProperties.memoryProperties.memoryTypeCount; j++) {
+            spdlog::info(
+                "{}: flags {:X} heap {}",
+                j,
+                static_cast<uint32_t>(physicalDevice.MemoryProperties.memoryProperties.memoryTypes[j].propertyFlags),
+                physicalDevice.MemoryProperties.memoryProperties.memoryTypes[j].heapIndex);
         }
 
-        spdlog::info("Num heap types {}", physicalDevice.MemoryProperties.memoryHeapCount);
+        spdlog::info("Num heap types {}", physicalDevice.MemoryProperties.memoryProperties.memoryHeapCount);
 
-        vkGetPhysicalDeviceFeatures(vkDevice, &physicalDevice.Features);
+        vkGetPhysicalDeviceFeatures2(vkDevice, &physicalDevice.Features);
     }
 }
 
@@ -117,13 +122,13 @@ uint32_t PhysicalDevices::SelectDevice(VkQueueFlags requiredQueueType, bool bSup
     for (const auto& physicalDevice : devices) {
         auto queueFamilyIndex = 0u;
         for (const auto& queueProperty : physicalDevice.QueueFamilyProperties) {
-            if ((queueProperty.queueFlags & requiredQueueType) &&
+            if ((queueProperty.queueFamilyProperties.queueFlags & requiredQueueType) &&
                 (physicalDevice.QueueSupportsPresent[queueFamilyIndex] == bSupportsPresent)) {
-                if (physicalDevice.Properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) {
+                if (physicalDevice.Properties.properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) {
                     selectedDevice = deviceIndex;
                     spdlog::info("Using GFX device {} ({}) and queue family {}",
                                  deviceIndex,
-                                 physicalDevice.Properties.deviceName,
+                                 physicalDevice.Properties.properties.deviceName,
                                  queueFamilyIndex);
                     return queueFamilyIndex;
                 }
@@ -140,7 +145,7 @@ uint32_t PhysicalDevices::SelectDevice(VkQueueFlags requiredQueueType, bool bSup
         selectedDevice = potentialDevice;
         spdlog::info("Using GFX device {} ({}) and queue family {}",
                      deviceIndex,
-                     devices[potentialDevice].Properties.deviceName,
+                     devices[potentialDevice].Properties.properties.deviceName,
                      potentialQueueFamilyIndex);
         return potentialQueueFamilyIndex;
     }

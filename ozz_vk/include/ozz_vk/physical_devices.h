@@ -8,14 +8,14 @@
 
 struct PhysicalDevice {
     VkPhysicalDevice Device;
-    VkPhysicalDeviceProperties Properties;
-    std::vector<VkQueueFamilyProperties> QueueFamilyProperties;
+    VkPhysicalDeviceProperties2 Properties {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+    std::vector<VkQueueFamilyProperties2> QueueFamilyProperties;
     std::vector<VkBool32> QueueSupportsPresent;
     std::vector<VkSurfaceFormatKHR> SurfaceFormats;
     VkSurfaceCapabilitiesKHR SurfaceCapabilities;
-    VkPhysicalDeviceMemoryProperties MemoryProperties;
+    VkPhysicalDeviceMemoryProperties2 MemoryProperties {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PROPERTIES_2};
     std::vector<VkPresentModeKHR> PresentModes;
-    VkPhysicalDeviceFeatures Features;
+    VkPhysicalDeviceFeatures2 Features {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
 };
 
 class PhysicalDevices {
