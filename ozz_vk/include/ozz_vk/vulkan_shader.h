@@ -4,11 +4,11 @@
 
 #pragma once
 
-#include <glslang/Public/ShaderLang.h>
-#include <vulkan/vulkan.h>
-
 #include <filesystem>
+#include <glslang/Public/ShaderLang.h>
 #include <memory>
+
+#include <volk.h>
 
 namespace OZZ::vk {
     struct CompiledShaderProgram {
@@ -52,6 +52,9 @@ namespace OZZ::vk {
         VulkanShader(VkDevice device, ShaderFileParams&& shaderFiles);
         VulkanShader(VkDevice device, ShaderSourceParams&& shaderSources);
 
+        void Bind(VkDevice device, VkCommandBuffer commandBuffer) const;
+        void Destroy(VkDevice vk_device);
+
     private:
         bool compileSources(VkDevice device, ShaderSourceParams&& shaderSources);
         static std::optional<CompiledShaderProgram> compileProgram(const ShaderSourceParams& shaderSources);
@@ -59,7 +62,8 @@ namespace OZZ::vk {
                                                                                 const std::string& glslCode);
 
     private:
-        std::unique_ptr<glslang::TProgram> shaderProgram;
+        std::vector<VkShaderEXT> shaders {};
+        std::vector<VkShaderStageFlagBits> shaderStages {};
     };
 
 } // namespace OZZ::vk

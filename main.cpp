@@ -1,6 +1,6 @@
 #include <iostream>
+#include <volk.h>
 
-#define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
 
 #include "ozz_vk/core.h"
@@ -20,7 +20,11 @@ class App {
 public:
     App() {};
 
-    ~App() { vkCore.FreeCommandBuffers(commandBuffers.size(), commandBuffers.data()); }
+    ~App() {
+        vulkanShader->Destroy(vkCore.GetDevice());
+        vkCore.FreeCommandBuffers(commandBuffers.size(), commandBuffers.data());
+        vkCore.Shutdown();
+    }
 
     void Init(const std::string& appName, GLFWwindow* window) {
         vkCore.Init({
@@ -33,15 +37,15 @@ public:
         queue = vkCore.GetQueue();
 
         numSwapchainImages = vkCore.GetSwapchainImageCount();
-        createCommandBuffers();
-        recordCommandBuffers();
-
         std::filesystem::path base = std::filesystem::current_path() / "assets" / "shaders" / "basic";
         vulkanShader = std::make_unique<OZZ::vk::VulkanShader>(vkCore.GetDevice(),
                                                                OZZ::vk::ShaderFileParams {
                                                                    .Vertex = base / "basic.vert",
                                                                    .Fragment = base / "basic.frag",
                                                                });
+
+        createCommandBuffers();
+        recordCommandBuffers();
     }
 
     void Render() {
@@ -59,9 +63,9 @@ private:
 
     void recordCommandBuffers() {
         VkClearColorValue clearColor {
-            1.f,
-            0.f,
-            0.f,
+            0.1f,
+            0.1f,
+            0.1f,
             1.f,
         };
 
@@ -114,8 +118,8 @@ private:
             presentToClearBarrier.image = vkCore.GetSwapchainImage(i);
 
             vkCmdPipelineBarrier(commandBuffer,
-                                 VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                                 VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                                 VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                                 VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
                                  0,
                                  0,
                                  nullptr,
@@ -159,6 +163,44 @@ private:
             };
             vkCmdBeginRendering(commandBuffer, &renderingInfo);
 
+            vulkanShader->Bind(vkCore.GetDevice(), commandBuffer);
+            // Viewport and scissor
+            VkViewport viewport {0.f, 0.f, (float)WINDOW_WIDTH, (float)WINDOW_HEIGHT, 0.f, 1.f};
+            VkRect2D scissor {{0, 0}, {WINDOW_WIDTH, WINDOW_HEIGHT}};
+            vkCmdSetViewportWithCount(commandBuffer, 1, &viewport);
+            vkCmdSetScissorWithCount(commandBuffer, 1, &scissor);
+            // Input assembly
+            vkCmdSetPrimitiveTopology(commandBuffer, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+            vkCmdSetPrimitiveRestartEnable(commandBuffer, VK_FALSE);
+
+            // Rasterization
+            vkCmdSetRasterizerDiscardEnable(commandBuffer, VK_FALSE);
+            vkCmdSetCullMode(commandBuffer, VK_CULL_MODE_NONE);
+            vkCmdSetFrontFace(commandBuffer, VK_FRONT_FACE_COUNTER_CLOCKWISE);
+            vkCmdSetDepthBiasEnable(commandBuffer, VK_FALSE);
+
+            // Depth/stencil
+            vkCmdSetDepthTestEnable(commandBuffer, VK_FALSE);
+            vkCmdSetDepthWriteEnable(commandBuffer, VK_FALSE);
+            vkCmdSetStencilTestEnable(commandBuffer, VK_FALSE);
+
+            // Vertex input (empty for hardcoded vertices in shader)
+            // Declare the function pointer (at class or file scope)
+            vkCmdSetVertexInputEXT(commandBuffer, 0, nullptr, 0, nullptr);
+            auto colorBlendEnabled = VK_FALSE;
+            vkCmdSetColorBlendEnableEXT(commandBuffer, 0, 1, &colorBlendEnabled);
+
+            VkColorComponentFlags colorWriteMasks = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                                                    VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+            vkCmdSetColorWriteMaskEXT(commandBuffer, 0, 1, &colorWriteMasks);
+
+            vkCmdSetAlphaToCoverageEnableEXT(commandBuffer, VK_FALSE);
+            auto sampleMask = 0xFFFFFFFF;
+            vkCmdSetSampleMaskEXT(commandBuffer, VK_SAMPLE_COUNT_1_BIT, &sampleMask);
+            vkCmdSetRasterizationSamplesEXT(commandBuffer, VK_SAMPLE_COUNT_1_BIT);
+            vkCmdSetPolygonModeEXT(commandBuffer, VK_POLYGON_MODE_FILL);
+
+            vkCmdDraw(commandBuffer, 3, 1, 0, 0);
             vkCmdEndRendering(commandBuffer);
 
             clearToPresentImageBarrier.image = vkCore.GetSwapchainImage(i);

@@ -6,7 +6,7 @@
 
 #include <cstdio>
 #include <cstdlib>
-#include <vulkan/vulkan_core.h>
+#include <volk.h>
 
 #define CHECK_VK_RESULT(res, msg)                                                                                      \
     if (res != VK_SUCCESS) {                                                                                           \

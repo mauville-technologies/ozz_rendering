@@ -9,8 +9,6 @@
 #include <functional>
 #include <string>
 
-#include <vulkan/vulkan.h>
-
 namespace OZZ::vk {
     struct InitParams {
         std::string AppName;
@@ -23,6 +21,7 @@ namespace OZZ::vk {
         ~VulkanCore();
 
         void Init(const InitParams& initParams);
+        void Shutdown();
         void CreateCommandBuffers(uint32_t numberOfCommandBuffers, VkCommandBuffer* commandBuffers);
         void FreeCommandBuffers(uint32_t numberOfCommandBuffers, VkCommandBuffer* buffers);
 

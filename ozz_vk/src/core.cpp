@@ -4,6 +4,8 @@
 
 #include <ozz_vk/core.h>
 
+#include "volk.h"
+
 #include <iostream>
 #include <vector>
 
@@ -38,42 +40,11 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL DebugCallback(VkDebugUtilsMessageSeverityF
 
 OZZ::vk::VulkanCore::VulkanCore() {}
 
-OZZ::vk::VulkanCore::~VulkanCore() {
-    queue.WaitIdle();
-    queue.Destroy();
-
-    vkDestroyCommandPool(device, commandBufferPool, nullptr);
-    spdlog::info("Destroyed command buffer pool");
-
-    for (auto imageView : swapchainImageViews) {
-        vkDestroyImageView(device, imageView, nullptr);
-    }
-
-    vkDestroySwapchainKHR(device, swapchain, nullptr);
-    spdlog::info("Swapchain destroyed");
-
-    vkDestroyDevice(device, nullptr);
-    spdlog::info("Logical device destroyed");
-
-    vkDestroySurfaceKHR(instance, surface, nullptr);
-    spdlog::info("Surface destroyed");
-
-    PFN_vkDestroyDebugUtilsMessengerEXT vkDestroyUtilsMessenger = VK_NULL_HANDLE;
-    vkDestroyUtilsMessenger = reinterpret_cast<PFN_vkDestroyDebugUtilsMessengerEXT>(
-        vkGetInstanceProcAddr(instance, "vkDestroyDebugUtilsMessengerEXT"));
-    if (!vkDestroyUtilsMessenger) {
-        spdlog::error("Could not find create debug messenger address");
-        exit(1);
-    }
-
-    vkDestroyUtilsMessenger(instance, debugMessenger, nullptr);
-    spdlog::info("Vulkan debug messenger destroyed");
-
-    vkDestroyInstance(instance, nullptr);
-    spdlog::info("Vulkan instance destroyed");
-}
+OZZ::vk::VulkanCore::~VulkanCore() {}
 
 void OZZ::vk::VulkanCore::Init(const InitParams& initParams) {
+    auto result = volkInitialize();
+    CHECK_VK_RESULT(result, "Initialize volk");
     createInstance(initParams.AppName);
     createDebugCallback();
     createSurface(initParams.SurfaceCreationFunction);
@@ -85,6 +56,55 @@ void OZZ::vk::VulkanCore::Init(const InitParams& initParams) {
     createCommandBufferPool();
 
     queue.Init(device, swapchain, queueFamily, 0);
+}
+
+void OZZ::vk::VulkanCore::Shutdown() {
+    queue.WaitIdle();
+    queue.Destroy();
+
+    if (commandBufferPool != VK_NULL_HANDLE) {
+        vkDestroyCommandPool(device, commandBufferPool, nullptr);
+        spdlog::info("Destroyed command buffer pool");
+        commandBufferPool = VK_NULL_HANDLE;
+    }
+
+    for (auto imageView : swapchainImageViews) {
+        if (imageView != VK_NULL_HANDLE) {
+            vkDestroyImageView(device, imageView, nullptr);
+            imageView = VK_NULL_HANDLE;
+        }
+    }
+    swapchainImageViews.clear();
+
+    if (swapchain != VK_NULL_HANDLE) {
+        vkDestroySwapchainKHR(device, swapchain, nullptr);
+        spdlog::info("Swapchain destroyed");
+        swapchain = VK_NULL_HANDLE;
+    }
+
+    if (device != VK_NULL_HANDLE) {
+        vkDestroyDevice(device, nullptr);
+        spdlog::info("Logical device destroyed");
+        device = VK_NULL_HANDLE;
+    }
+
+    if (surface != VK_NULL_HANDLE) {
+        vkDestroySurfaceKHR(instance, surface, nullptr);
+        spdlog::info("Surface destroyed");
+        surface = VK_NULL_HANDLE;
+    }
+
+    if (debugMessenger != VK_NULL_HANDLE) {
+        vkDestroyDebugUtilsMessengerEXT(instance, debugMessenger, nullptr);
+        spdlog::info("Vulkan debug messenger destroyed");
+        debugMessenger = VK_NULL_HANDLE;
+    }
+
+    if (instance != VK_NULL_HANDLE) {
+        vkDestroyInstance(instance, nullptr);
+        spdlog::info("Vulkan instance destroyed");
+        instance = VK_NULL_HANDLE;
+    }
 }
 
 void OZZ::vk::VulkanCore::CreateCommandBuffers(const uint32_t numberOfCommandBuffers, VkCommandBuffer* commandBuffers) {
@@ -170,6 +190,8 @@ void OZZ::vk::VulkanCore::createInstance(const std::string& appName) {
     CHECK_VK_RESULT(result, "Create Instance");
 
     spdlog::info("Vulkan instance created.");
+
+    volkLoadInstance(instance);
 }
 
 void OZZ::vk::VulkanCore::createDebugCallback() {
@@ -220,6 +242,7 @@ void OZZ::vk::VulkanCore::createDevice() {
         VK_KHR_SWAPCHAIN_EXTENSION_NAME,
         VK_EXT_SHADER_OBJECT_EXTENSION_NAME,
         VK_EXT_VERTEX_INPUT_DYNAMIC_STATE_EXTENSION_NAME,
+        VK_EXT_EXTENDED_DYNAMIC_STATE_3_EXTENSION_NAME,
     };
 
     if (physicalDevices.Selected().Features.features.geometryShader == VK_FALSE) {
@@ -249,7 +272,7 @@ void OZZ::vk::VulkanCore::createDevice() {
         .features =
             VkPhysicalDeviceFeatures {
                 .geometryShader = VK_TRUE,
-                .tessellationShader = VK_TRUE,
+                // .tessellationShader = VK_TRUE,
             },
     };
 
@@ -267,6 +290,7 @@ void OZZ::vk::VulkanCore::createDevice() {
     CHECK_VK_RESULT(result, "create logical device");
 
     spdlog::info("Logical device created");
+    volkLoadDevice(device);
 }
 
 void OZZ::vk::VulkanCore::createSwapchain() {

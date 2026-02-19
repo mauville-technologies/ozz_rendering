@@ -20,8 +20,15 @@ void OZZ::vk::VulkanQueue::Init(VkDevice inDevice,
 }
 
 void OZZ::vk::VulkanQueue::Destroy() {
-    vkDestroySemaphore(device, presentCompleteSemaphore, nullptr);
-    vkDestroySemaphore(device, renderCompleteSemaphore, nullptr);
+    if (presentCompleteSemaphore != VK_NULL_HANDLE) {
+        vkDestroySemaphore(device, presentCompleteSemaphore, nullptr);
+        presentCompleteSemaphore = VK_NULL_HANDLE;
+    }
+
+    if (renderCompleteSemaphore != VK_NULL_HANDLE) {
+        vkDestroySemaphore(device, renderCompleteSemaphore, nullptr);
+        renderCompleteSemaphore = VK_NULL_HANDLE;
+    }
 }
 
 uint32_t OZZ::vk::VulkanQueue::AcquireNextImage() {

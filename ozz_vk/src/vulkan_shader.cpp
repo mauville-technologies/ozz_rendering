@@ -47,7 +47,24 @@ namespace OZZ::vk {
         compileSources(device, std::move(shaderSources));
     }
 
+    void VulkanShader::Bind(VkDevice device, VkCommandBuffer commandBuffer) const {
+        vkCmdBindShadersEXT(commandBuffer, shaderStages.size(), shaderStages.data(), shaders.data());
+    }
+
+    void VulkanShader::Destroy(VkDevice vk_device) {
+        for (auto shader : shaders) {
+            if (shader != VK_NULL_HANDLE) {
+                vkDestroyShaderEXT(vk_device, shader, nullptr);
+            }
+        }
+        shaders.clear();
+        shaderStages.clear();
+    }
+
     bool VulkanShader::compileSources(VkDevice device, ShaderSourceParams&& shaderSources) {
+        shaderStages.clear();
+        shaders.clear();
+
         auto compiledOpt = compileProgram(shaderSources);
         if (!compiledOpt.has_value()) {
             spdlog::error("Failed to compile shader program. Aborting process. See logs for details.");
@@ -76,6 +93,33 @@ namespace OZZ::vk {
         };
 
         createInfos.emplace_back(vertexCreateInfo);
+        shaderStages.emplace_back(VK_SHADER_STAGE_VERTEX_BIT);
+
+        bool bHasGeo = !shaderSources.Geometry.empty();
+        if (bHasGeo) {
+            VkShaderCreateInfoEXT geometryCreateInfo {
+                .sType = VK_STRUCTURE_TYPE_SHADER_CREATE_INFO_EXT,
+                .pNext = nullptr,
+                .flags = VK_SHADER_CREATE_LINK_STAGE_BIT_EXT,
+                .stage = VK_SHADER_STAGE_GEOMETRY_BIT,
+                .nextStage = VK_SHADER_STAGE_FRAGMENT_BIT,
+                .codeType = VK_SHADER_CODE_TYPE_SPIRV_EXT,
+                .codeSize = compiled.GeometrySpirv.size() * sizeof(uint32_t),
+                .pCode = compiled.GeometrySpirv.data(),
+                .pName = "main",
+                .setLayoutCount = 0,
+                .pSetLayouts = nullptr,
+                .pushConstantRangeCount = 0,
+                .pPushConstantRanges = nullptr,
+                .pSpecializationInfo = nullptr,
+            };
+
+            // vertex will go to geometry instead
+            createInfos[0].nextStage = VK_SHADER_STAGE_GEOMETRY_BIT;
+            createInfos.emplace_back(geometryCreateInfo);
+            shaderStages.emplace_back(VK_SHADER_STAGE_GEOMETRY_BIT);
+        }
+
         VkShaderCreateInfoEXT fragmentCreateInfo {
             .sType = VK_STRUCTURE_TYPE_SHADER_CREATE_INFO_EXT,
             .pNext = nullptr,
@@ -93,45 +137,19 @@ namespace OZZ::vk {
             .pSpecializationInfo = nullptr,
         };
 
-        // bool bHasGeo = !shaderSources.Geometry.empty();
-        // if (bHasGeo) {
-        //     VkShaderCreateInfoEXT geometryCreateInfo {
-        //         .sType = VK_STRUCTURE_TYPE_SHADER_CREATE_INFO_EXT,
-        //         .pNext = nullptr,
-        //         .flags = VK_SHADER_CREATE_LINK_STAGE_BIT_EXT,
-        //         .stage = VK_SHADER_STAGE_GEOMETRY_BIT,
-        //         .nextStage = VK_SHADER_STAGE_FRAGMENT_BIT,
-        //         .codeType = VK_SHADER_CODE_TYPE_SPIRV_EXT,
-        //         .codeSize = compiled.GeometrySpirv.size() * sizeof(uint32_t),
-        //         .pCode = compiled.GeometrySpirv.data(),
-        //         .pName = "main",
-        //         .setLayoutCount = 0,
-        //         .pSetLayouts = nullptr,
-        //         .pushConstantRangeCount = 0,
-        //         .pPushConstantRanges = nullptr,
-        //         .pSpecializationInfo = nullptr,
-        //     };
-        //
-        //     // vertex will go to geometry instead
-        //     vertexCreateInfo.nextStage = VK_SHADER_STAGE_GEOMETRY_BIT;
-        //     createInfos.emplace_back(geometryCreateInfo);
-        // }
-
         createInfos.emplace_back(fragmentCreateInfo);
+        shaderStages.emplace_back(VK_SHADER_STAGE_FRAGMENT_BIT);
 
-        std::vector<VkShaderEXT> shaders {};
         shaders.resize(createInfos.size());
 
-        PFN_vkCreateShadersEXT vkCreateShadersEXT = VK_NULL_HANDLE;
-        vkCreateShadersEXT =
-            reinterpret_cast<PFN_vkCreateShadersEXT>(vkGetDeviceProcAddr(device, "vkCreateShadersEXT"));
-        if (!vkCreateShadersEXT) {
-            spdlog::error("Could not find shader object create function");
-            exit(1);
-        }
         const auto result = vkCreateShadersEXT(device, createInfos.size(), createInfos.data(), nullptr, shaders.data());
         CHECK_VK_RESULT(result, "Creating shader object");
         spdlog::info("Successfully created shader object");
+
+        if (!bHasGeo) {
+            shaders.emplace_back(VK_NULL_HANDLE);
+            shaderStages.emplace_back(VK_SHADER_STAGE_GEOMETRY_BIT);
+        }
 
         glslang::FinalizeProcess();
         return true;
