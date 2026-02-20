@@ -56,7 +56,7 @@ uint32_t OZZ::vk::VulkanQueue::AcquireNextImage() {
                                               &imageIndex);
 
     CHECK_VK_RESULT(result, "Acquire next image");
-    return imageIndex;
+    return currentFrame;
 }
 
 void OZZ::vk::VulkanQueue::SubmitSync(VkCommandBuffer commandBuffer) {
@@ -107,7 +107,7 @@ void OZZ::vk::VulkanQueue::Present(uint32_t imageIndex) {
         .pWaitSemaphores = &frameSync.RenderCompleteSemaphore,
         .swapchainCount = 1,
         .pSwapchains = &swapchain,
-        .pImageIndices = &imageIndex,
+        .pImageIndices = &currentFrame,
         .pResults = VK_NULL_HANDLE,
     };
 
