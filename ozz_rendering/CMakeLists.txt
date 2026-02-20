@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(ozz_vk)
+project(ozz_rendering)
 
 include(FetchContent)
 

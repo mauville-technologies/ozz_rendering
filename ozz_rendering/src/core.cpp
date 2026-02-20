@@ -2,7 +2,7 @@
 // Created by paulm on 2026-02-10.
 //
 
-#include <ozz_vk/core.h>
+#include <ozz_rendering/core.h>
 
 #include "volk.h"
 
@@ -11,7 +11,7 @@
 
 #include <spdlog/spdlog.h>
 
-#include "ozz_vk/util.h"
+#include "ozz_rendering/util.h"
 
 static VKAPI_ATTR VkBool32 VKAPI_CALL DebugCallback(VkDebugUtilsMessageSeverityFlagBitsEXT severity,
                                                     VkDebugUtilsMessageTypeFlagsEXT type,

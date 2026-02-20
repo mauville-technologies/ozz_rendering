@@ -2,9 +2,9 @@
 // Created by paulm on 2026-02-15.
 //
 
-#include "ozz_vk/vulkan_queue.h"
+#include "ozz_rendering/vulkan_queue.h"
 
-#include "ozz_vk/util.h"
+#include "ozz_rendering/util.h"
 #include "spdlog/spdlog.h"
 
 void OZZ::vk::VulkanQueue::Init(VkDevice inDevice,
@@ -39,6 +39,7 @@ void OZZ::vk::VulkanQueue::Destroy() {
         }
     }
     frameSyncObjects.clear();
+    queue = VK_NULL_HANDLE;
 }
 
 uint32_t OZZ::vk::VulkanQueue::AcquireNextImage() {
@@ -118,7 +119,9 @@ void OZZ::vk::VulkanQueue::Present(uint32_t imageIndex) {
 }
 
 void OZZ::vk::VulkanQueue::WaitIdle() {
-    vkQueueWaitIdle(queue);
+    if (queue != VK_NULL_HANDLE) {
+        vkQueueWaitIdle(queue);
+    }
 }
 
 void OZZ::vk::VulkanQueue::createSyncObjects() {

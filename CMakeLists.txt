@@ -29,11 +29,11 @@ FetchContent_MakeAvailable(spdloglib)
 
 add_executable(vulkan_playground main.cpp)
 
-add_subdirectory(ozz_vk)
+add_subdirectory(ozz_rendering)
 
 target_link_libraries(${PROJECT_NAME}
         PRIVATE
-        ozz_vk
+        ozz_rendering
         glfw
         glm
         spdlog

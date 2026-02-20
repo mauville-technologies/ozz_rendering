@@ -2,9 +2,9 @@
 // Created by paulm on 2026-02-10.
 //
 
-#include <ozz_vk/physical_devices.h>
+#include <ozz_rendering/physical_devices.h>
 
-#include "ozz_vk/util.h"
+#include "ozz_rendering/util.h"
 #include "spdlog/spdlog.h"
 
 #include <ranges>

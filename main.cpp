@@ -3,10 +3,10 @@
 
 #include <GLFW/glfw3.h>
 
-#include "ozz_vk/core.h"
-#include "ozz_vk/util.h"
-#include "ozz_vk/vulkan_queue.h"
-#include "ozz_vk/vulkan_shader.h"
+#include "ozz_rendering/core.h"
+#include "ozz_rendering/util.h"
+#include "ozz_rendering/vulkan_queue.h"
+#include "ozz_rendering/vulkan_shader.h"
 #include "spdlog/spdlog.h"
 
 #include <filesystem>
@@ -20,11 +20,7 @@ class App {
 public:
     App() {};
 
-    ~App() {
-        vulkanShader->Destroy(vkCore.GetDevice());
-        vkCore.FreeCommandBuffers(commandBuffers.size(), commandBuffers.data());
-        vkCore.Shutdown();
-    }
+    ~App() { Shutdown(); }
 
     void Init(const std::string& appName, GLFWwindow* window) {
         vkCore.Init({
@@ -46,6 +42,18 @@ public:
 
         createCommandBuffers();
         recordCommandBuffers();
+    }
+
+    void Shutdown() {
+        if (vulkanShader) {
+            vulkanShader->Destroy(vkCore.GetDevice());
+            vulkanShader.reset();
+        }
+        if (!commandBuffers.empty()) {
+            vkCore.FreeCommandBuffers(commandBuffers.size(), commandBuffers.data());
+            commandBuffers.clear();
+        }
+        vkCore.Shutdown();
     }
 
     void Render() {
@@ -268,6 +276,7 @@ int main() {
         glfwPollEvents();
     }
 
+    app.Shutdown();
     glfwTerminate();
     return 0;
 }

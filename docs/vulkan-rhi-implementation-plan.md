@@ -18,6 +18,7 @@ create a modern RHI (Render Hardware Interface) abstraction that:
 - **Resource Management**: Device creates and manages shaders, textures, buffers
 - **Command Buffers**: Single command buffer per frame, passed through render graph
 - **Backend Abstraction**: OpenGL and Vulkan implementations behind common interface
+- **Ownership**: `LightsGame` owns both `RHIDevice` and `ResourceManager`; `ResourceManager` depends on `RHIDevice`, not the other way around
 
 ### Key Design Principles
 
@@ -26,6 +27,75 @@ create a modern RHI (Render Hardware Interface) abstraction that:
 3. **Render Graph Integration**: Command buffer flows through existing Renderable::render() calls
 4. **Runtime Backend Selection**: Choose OpenGL/Vulkan at application startup
 5. **Future-Proof**: Architecture supports later parallelization of command recording
+
+## Platform Bootstrap & Initialization
+
+Renderer initialization is tightly coupled to platform initialization — the window must exist before the graphics backend can create a surface or context. The correct sequence is: **platform → device → renderer → resource manager → scene**.
+
+### Initialization Sequence
+
+```
+1. Window/Platform  →  native window handle, required instance extensions
+2. RHIDevice        →  instance, surface, physical device, logical device, swapchain, queues
+3. Renderer         →  owns frame lifecycle (BeginFrame/EndFrame) via device
+4. ResourceManager  →  GPU uploads via device
+5. Scene/Game       →  loads resources via ResourceManager
+```
+
+### PlatformContext & Device Creation
+
+```cpp
+// Provided by the platform layer (Window) to bootstrap the device
+struct PlatformContext {
+    void* nativeWindowHandle;                          // HWND, xcb_window_t, etc.
+    void* nativeDisplayHandle;                         // DISPLAY, xcb_connection_t, etc.
+    std::vector<const char*> requiredInstanceExtensions; // from glfwGetRequiredInstanceExtensions
+    glm::ivec2 windowSize;
+};
+
+struct RHIDeviceDesc {
+    RHIBackendType backend       = RHIBackendType::Auto;
+    PlatformContext platform;
+    bool enableValidation        = false;
+};
+
+// Device factory - selects backend, runs full backend init internally
+std::unique_ptr<IRHIDevice> CreateRHIDevice(const RHIDeviceDesc& desc);
+```
+
+### LightsGame Initialization Order
+
+```cpp
+bool LightsGame::Initialize(const GameParameters& params) {
+    // 1. Platform first — window and native handles must exist before device
+    m_window = CreatePlatformWindow(params);
+
+    // 2. Device — runs all backend init (vkCreateInstance, surface, swapchain, queues, etc.)
+    m_rhiDevice = CreateRHIDevice({
+        .backend          = params.PreferredBackend,
+        .platform         = m_window->GetPlatformContext(),
+        .enableValidation = params.EnableValidation,
+    });
+
+    // 3. Renderer — only consumer of BeginFrame/EndFrame
+    m_renderer = std::make_unique<Renderer>(m_rhiDevice.get());
+
+    // 4. ResourceManager — depends on device for GPU resource creation/upload
+    m_resourceManager = std::make_unique<ResourceManager>(m_rhiDevice.get());
+
+    // 5. Scene — loads assets via ResourceManager
+    m_scene = std::make_unique<SceneType>();
+    m_scene->Init(m_resourceManager.get());
+
+    return true;
+}
+
+// Window resize stays entirely inside the device — callers just notify
+void LightsGame::OnWindowResize(glm::ivec2 newSize) {
+    m_rhiDevice->NotifyWindowResize(newSize);
+    // Renderer picks up the new swapchain automatically on next BeginFrame
+}
+```
 
 ## Implementation Workplan
 
@@ -87,24 +157,30 @@ create a modern RHI (Render Hardware Interface) abstraction that:
 class IRHIDevice {
 public:
     virtual ~IRHIDevice() = default;
-    
+
+    // Frame lifecycle — swapchain acquisition, sync, and present are fully internal
+    virtual FrameContext BeginFrame() = 0;
+    virtual void EndFrame(FrameContext frame) = 0;
+
     // Resource Creation
-    virtual RHITextureHandle CreateTexture(const TextureDesc& desc) = 0;
-    virtual RHIShaderHandle CreateShader(const ShaderDesc& desc) = 0;
-    virtual RHIBufferHandle CreateBuffer(const BufferDesc& desc) = 0;
-    virtual RHIMaterialHandle CreateMaterial(const MaterialDesc& desc) = 0;
+    virtual RHITextureHandle      CreateTexture(const TextureDesc& desc) = 0;
+    virtual RHIShaderHandle       CreateShader(const ShaderDesc& desc) = 0;
+    virtual RHIBufferHandle       CreateBuffer(const BufferDesc& desc) = 0;
     virtual RHIRenderTargetHandle CreateRenderTarget(const RenderTargetDesc& desc) = 0;
-    
-    // Resource Management
-    virtual void DestroyResource(RHIResourceHandle handle) = 0;
+
+    // Resource Updates
     virtual void UpdateBuffer(RHIBufferHandle buffer, const void* data, size_t size, size_t offset = 0) = 0;
     virtual void UpdateTexture(RHITextureHandle texture, const void* data, const TextureUpdateDesc& desc) = 0;
-    
-    // Command Buffer Management
-    virtual RHICommandBufferHandle CreateCommandBuffer() = 0;
-    virtual void SubmitCommandBuffer(RHICommandBufferHandle cmdBuffer) = 0;
-    virtual void Present() = 0;
-    
+
+    // Resource Destruction
+    virtual void DestroyTexture(RHITextureHandle handle) = 0;
+    virtual void DestroyShader(RHIShaderHandle handle) = 0;
+    virtual void DestroyBuffer(RHIBufferHandle handle) = 0;
+    virtual void DestroyRenderTarget(RHIRenderTargetHandle handle) = 0;
+
+    // Platform events
+    virtual void NotifyWindowResize(glm::ivec2 newSize) = 0;
+
     // Device Info
     virtual RHIBackendType GetBackendType() const = 0;
     virtual const RHIDeviceCapabilities& GetCapabilities() const = 0;
@@ -565,19 +641,6 @@ The generational system trades a small amount of memory (extra generation counte
 
 ## Technical Considerations
 
-### Command Buffer Flow
-
-```
-Game Loop → Renderer → RenderGraph → Renderable::render(commandBuffer) → Commands Recorded → Submit → Present
-```
-
-### Resource Handle Design
-
-- Opaque handles instead of direct pointers
-- RHIDevice validates handles and manages backing resources
-- Automatic cleanup on device destruction
-- Type-safe resource binding
-
 ### Backend-Specific Challenges
 
 **OpenGL:**
@@ -595,193 +658,264 @@ Game Loop → Renderer → RenderGraph → Renderable::render(commandBuffer) →
 
 ### Integration Points
 
-#### 1. GameParameters Extension
-
-```cpp
-enum class RHIBackendType {
-    Auto,           // Auto-detect best available
-    OpenGL,         // Force OpenGL 4.1+
-    Vulkan,         // Force Vulkan 1.0+
-    Count
-};
-
-struct GameParameters {
-    float FPS = 60.0f;
-    glm::ivec2 WindowSize = {1280, 720};
-    EWindowMode WindowMode = EWindowMode::Windowed;
-    float SampleRate = 44100.0f;
-    int AudioChannels = 2;
-    RHIBackendType PreferredBackend = RHIBackendType::Auto;  // NEW
-    bool EnableValidation = false;  // NEW - for debug builds
-};
-```
-
-#### 2. LightsGame Template Updates
-
-```cpp
-template<typename SceneType>
-class LightsGame {
-private:
-    std::unique_ptr<IRHIDevice> m_rhiDevice;
-    std::unique_ptr<Window> m_window;
-    std::unique_ptr<Renderer> m_renderer;
-    // ... other subsystems
-
-public:
-    bool Initialize(const GameParameters& params) {
-        // Create window first (needed for graphics context)
-        m_window = CreateWindow(params);
-        
-        // Create RHI device based on preference
-        m_rhiDevice = CreateRHIDevice(params.PreferredBackend, m_window.get(), params.EnableValidation);
-        if (!m_rhiDevice) {
-            LOG_ERROR("Failed to create RHI device");
-            return false;
-        }
-        
-        // Pass RHI device to renderer
-        m_renderer = std::make_unique<Renderer>(m_rhiDevice.get());
-        
-        // Initialize other subsystems...
-        return true;
-    }
-};
-
-// Factory function
-std::unique_ptr<IRHIDevice> CreateRHIDevice(RHIBackendType preferred, Window* window, bool enableValidation) {
-    if (preferred == RHIBackendType::Auto) {
-        // Try Vulkan first, fall back to OpenGL
-        if (auto vulkanDevice = CreateVulkanDevice(window, enableValidation)) {
-            return vulkanDevice;
-        }
-        return CreateOpenGLDevice(window, enableValidation);
-    }
-    
-    switch (preferred) {
-        case RHIBackendType::Vulkan:
-            return CreateVulkanDevice(window, enableValidation);
-        case RHIBackendType::OpenGL:
-            return CreateOpenGLDevice(window, enableValidation);
-        default:
-            return nullptr;
-    }
-}
-```
-
-#### 3. Renderer Class Updates
+#### 1. Renderer Class
 
 ```cpp
 class Renderer {
 private:
     IRHIDevice* m_rhiDevice;
-    RHICommandBufferHandle m_currentCommandBuffer;
-    
+
 public:
     explicit Renderer(IRHIDevice* rhiDevice) : m_rhiDevice(rhiDevice) {}
-    
+
     void ExecuteSceneGraph() {
-        // Create command buffer for this frame
-        m_currentCommandBuffer = m_rhiDevice->CreateCommandBuffer();
-        auto* cmdBuffer = m_rhiDevice->GetCommandBuffer(m_currentCommandBuffer);
-        
-        // Execute render graph with command buffer
+        // BeginFrame: fence wait, swapchain acquire, command buffer begin — all internal
+        FrameContext frame = m_rhiDevice->BeginFrame();
+
+        RenderParams params {
+            .commandBuffer = frame.GetCommandBuffer(),
+            .backbuffer    = frame.GetBackbuffer(),
+        };
+
         if (auto sceneGraph = GetCurrentScene()->GetSceneGraph()) {
-            RenderParams params = BuildRenderParams();
-            sceneGraph->render(cmdBuffer, params);
+            sceneGraph->render(params);
         }
-        
-        // Submit and present
-        m_rhiDevice->SubmitCommandBuffer(m_currentCommandBuffer);
-        m_rhiDevice->Present();
+
+        // EndFrame: command buffer end, queue submit, present — all internal
+        m_rhiDevice->EndFrame(std::move(frame));
     }
 };
 ```
 
-#### 4. Resource Manager Integration
+#### 2. Resource Manager Integration
 
 ```cpp
 class ResourceManager {
 private:
     IRHIDevice* m_rhiDevice;
-    
+
 public:
     explicit ResourceManager(IRHIDevice* rhiDevice) : m_rhiDevice(rhiDevice) {}
-    
-    // Texture loading through RHI
+
     RHITextureHandle LoadTexture(const std::string& path) {
-        // Load image data (unchanged)
         auto imageData = LoadImageFromFile(path);
-        
-        // Create through RHI device
+
         TextureDesc desc {
-            .width = imageData.width,
+            .width  = imageData.width,
             .height = imageData.height,
             .format = RHIFormat::RGBA8,
-            .usage = RHITextureUsage::ShaderRead,
-            .data = imageData.pixels
+            .usage  = RHITextureUsage::ShaderRead,
+            .data   = imageData.pixels
         };
-        
+
         return m_rhiDevice->CreateTexture(desc);
     }
-    
-    // Shader loading through RHI
+
     RHIShaderHandle LoadShader(const std::string& vertPath, const std::string& fragPath) {
-        auto vertSource = ReadFile(vertPath);
-        auto fragSource = ReadFile(fragPath);
-        
         ShaderDesc desc {
             .stages = {
-                {RHIShaderStage::Vertex, vertSource},
-                {RHIShaderStage::Fragment, fragSource}
+                {RHIShaderStage::Vertex,   ReadFile(vertPath)},
+                {RHIShaderStage::Fragment, ReadFile(fragPath)}
             }
         };
-        
+
         return m_rhiDevice->CreateShader(desc);
     }
 };
 ```
 
-#### 5. Updated Material System
+#### 3. Updated Material System
 
 ```cpp
-// Materials become resource handle containers + binding logic
 class Material {
 private:
     IRHIDevice* m_rhiDevice;
     RHIShaderHandle m_shader;
-    
-    // Resource bindings (accumulated until bind time)
+
     std::unordered_map<std::string, RHITextureHandle> m_textures;
-    std::unordered_map<std::string, RHIBufferHandle> m_uniformBuffers;
+    std::unordered_map<std::string, RHIBufferHandle>  m_uniformBuffers;
     std::vector<uint8_t> m_pushConstantData;
-    
+
 public:
-    Material(IRHIDevice* device, RHIShaderHandle shader) 
+    Material(IRHIDevice* device, RHIShaderHandle shader)
         : m_rhiDevice(device), m_shader(shader) {}
-    
-    // Resource binding (deferred until command buffer bind)
+
     void SetTexture(const std::string& name, RHITextureHandle texture) {
         m_textures[name] = texture;
     }
-    
+
     void SetPushConstant(const std::string& name, const void* data, size_t size) {
-        // Accumulate push constant data
-        // (implementation depends on shader reflection)
+        // Accumulate push constant data (layout resolved via shader reflection)
     }
-    
-    // Command buffer integration
+
     void BindToCommandBuffer(IRHICommandBuffer* cmdBuffer) {
-        // Create material descriptor/pipeline state if needed
         auto materialHandle = m_rhiDevice->GetOrCreateMaterialState(m_shader, m_textures, m_uniformBuffers);
-        
         cmdBuffer->BindMaterial(materialHandle);
-        
+
         if (!m_pushConstantData.empty()) {
             cmdBuffer->PushConstants(m_pushConstantData.data(), m_pushConstantData.size());
         }
     }
 };
 ```
+
+## Frame Lifecycle & Backbuffer Access
+
+Swapchain acquisition happens inside `BeginFrame()`, which returns a `FrameContext` token. App/renderer code never sees raw swapchain images or image indices — only opaque handles and command buffers.
+
+`FrameContext` is only constructable by `RHIDevice` (via `friend`), and its internal swapchain fields are private. The renderer is the sole caller of `BeginFrame`/`EndFrame`; renderables only ever see `RenderParams`.
+
+```cpp
+// ------------------------------------------------------------------
+// Public-facing frame token - app/renderer code only sees this
+// ------------------------------------------------------------------
+class FrameContext {
+public:
+    // Only thing app-level renderables can do:
+    IRHICommandBuffer* GetCommandBuffer() { return m_cmdBuffer; }
+    RHIRenderTargetHandle GetBackbuffer() { return m_backbufferHandle; }
+
+    // Non-copyable - one frame in flight at a time
+    FrameContext(const FrameContext&) = delete;
+    FrameContext& operator=(const FrameContext&) = delete;
+    FrameContext(FrameContext&&) = default;
+
+private:
+    // Only RHIDevice can construct this
+    friend class RHIDevice;
+
+    FrameContext(IRHICommandBuffer* cmd, RHIRenderTargetHandle backbuffer,
+                 uint32_t imageIndex, uint32_t frameIndex)
+        : m_cmdBuffer(cmd)
+        , m_backbufferHandle(backbuffer)
+        , m_imageIndex(imageIndex)       // hidden from app
+        , m_frameIndex(frameIndex) {}    // hidden from app
+
+    IRHICommandBuffer* m_cmdBuffer;
+    RHIRenderTargetHandle m_backbufferHandle;
+
+    uint32_t m_imageIndex;   // raw swapchain index - internal only
+    uint32_t m_frameIndex;   // frame-in-flight index - internal only
+};
+
+// ------------------------------------------------------------------
+// Public device interface (app / renderer facing)
+// ------------------------------------------------------------------
+class IRHIDevice {
+public:
+    virtual ~IRHIDevice() = default;
+
+    // Frame lifecycle - swapchain acquisition is fully internal
+    virtual FrameContext BeginFrame() = 0;
+    virtual void EndFrame(FrameContext frame) = 0;
+
+    // Resource creation
+    virtual RHITextureHandle  CreateTexture(const TextureDesc& desc) = 0;
+    virtual RHIBufferHandle   CreateBuffer(const BufferDesc& desc) = 0;
+    virtual RHIShaderHandle   CreateShader(const ShaderDesc& desc) = 0;
+
+    virtual void DestroyTexture(RHITextureHandle handle) = 0;
+    virtual void DestroyBuffer(RHIBufferHandle handle) = 0;
+    virtual void DestroyShader(RHIShaderHandle handle) = 0;
+};
+
+// ------------------------------------------------------------------
+// Vulkan backend implementation
+// ------------------------------------------------------------------
+class VulkanDevice : public IRHIDevice {
+public:
+    FrameContext BeginFrame() override {
+        auto& sync = m_frameSync[m_currentFrame];
+
+        // Fence wait/reset
+        vkWaitForFences(m_device, 1, &sync.inFlightFence, VK_TRUE, UINT64_MAX);
+        vkResetFences(m_device, 1, &sync.inFlightFence);
+
+        // Swapchain acquisition - fully hidden here
+        uint32_t imageIndex;
+        VkResult result = vkAcquireNextImageKHR(m_device, m_swapchain, UINT64_MAX,
+                                                sync.imageAvailable, VK_NULL_HANDLE,
+                                                &imageIndex);
+        if (result == VK_ERROR_OUT_OF_DATE_KHR) {
+            recreateSwapchain();
+            return BeginFrame();  // retry
+        }
+
+        // Reset and begin the command buffer for this frame
+        auto* cmdBuffer = m_commandBuffers[m_currentFrame];
+        cmdBuffer->Reset();
+        cmdBuffer->Begin();
+
+        // Expose the swapchain image as an opaque RHI render target
+        RHIRenderTargetHandle backbuffer = m_backbufferTargets[imageIndex];
+
+        return FrameContext(cmdBuffer, backbuffer, imageIndex, m_currentFrame);
+    }
+
+    void EndFrame(FrameContext frame) override {
+        auto& sync = m_frameSync[frame.m_frameIndex];
+
+        frame.m_cmdBuffer->End();
+
+        // Submit - semaphore wiring is internal detail
+        VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        VkSubmitInfo submitInfo {
+            .sType                = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+            .waitSemaphoreCount   = 1,
+            .pWaitSemaphores      = &sync.imageAvailable,
+            .pWaitDstStageMask    = &waitStage,
+            .commandBufferCount   = 1,
+            .pCommandBuffers      = &nativeCmd,
+            .signalSemaphoreCount = 1,
+            .pSignalSemaphores    = &sync.renderFinished,
+        };
+        vkQueueSubmit(m_graphicsQueue, 1, &submitInfo, sync.inFlightFence);
+
+        // Present
+        VkPresentInfoKHR presentInfo {
+            .sType              = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
+            .waitSemaphoreCount = 1,
+            .pWaitSemaphores    = &sync.renderFinished,
+            .swapchainCount     = 1,
+            .pSwapchains        = &m_swapchain,
+            .pImageIndices      = &frame.m_imageIndex,
+        };
+        VkResult result = vkQueuePresentKHR(m_presentQueue, &presentInfo);
+        if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
+            recreateSwapchain();
+        }
+
+        m_currentFrame = (m_currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
+    }
+};
+
+// ------------------------------------------------------------------
+// Renderer - only consumer of FrameContext
+// ------------------------------------------------------------------
+class Renderer {
+public:
+    void ExecuteSceneGraph() {
+        FrameContext frame = m_device->BeginFrame();
+
+        // Pass command buffer + opaque backbuffer handle into the render graph
+        RenderParams params {
+            .commandBuffer = frame.GetCommandBuffer(),
+            .backbuffer    = frame.GetBackbuffer(),
+        };
+        m_sceneGraph->render(params);
+
+        m_device->EndFrame(std::move(frame));
+    }
+};
+```
+
+### Key Design Points
+
+- **`FrameContext` is only constructable by `VulkanDevice`** via `friend class RHIDevice` — nothing else can create one
+- **`m_imageIndex` and `m_frameIndex` are private** — app code can't touch them, only `EndFrame` can via friendship
+- **`GetBackbuffer()` returns an opaque handle**, never a `VkImage` or `VkImageView`
+- **`recreateSwapchain()` is entirely invisible** — callers just retry or get a valid frame back
+- The renderer is the **only site** that calls `BeginFrame`/`EndFrame`; renderables only see `RenderParams`
 
 ## Future Enhancements
 
