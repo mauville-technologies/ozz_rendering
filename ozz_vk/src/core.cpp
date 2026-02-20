@@ -55,7 +55,7 @@ void OZZ::vk::VulkanCore::Init(const InitParams& initParams) {
     createSwapchain();
     createCommandBufferPool();
 
-    queue.Init(device, swapchain, queueFamily, 0);
+    queue.Init(device, swapchainImages.size(), swapchain, queueFamily, 0);
 }
 
 void OZZ::vk::VulkanCore::Shutdown() {
@@ -380,7 +380,7 @@ uint32_t OZZ::vk::VulkanCore::chooseNumberOfSwapchainImages(const VkSurfaceCapab
 
 VkPresentModeKHR OZZ::vk::VulkanCore::choosePresentMode(const std::vector<VkPresentModeKHR>& presentModes) {
     for (const auto presentMode : presentModes) {
-        if (presentMode == VK_PRESENT_MODE_MAILBOX_KHR) {
+        if (presentMode == VK_PRESENT_MODE_IMMEDIATE_KHR) {
             return presentMode;
         }
     }

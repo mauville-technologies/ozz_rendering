@@ -52,7 +52,7 @@ public:
         uint32_t imageIndex = queue->AcquireNextImage();
         queue->SubmitAsync(commandBuffers[imageIndex]);
         queue->Present(imageIndex);
-        queue->WaitIdle();
+        // queue->WaitIdle();
     }
 
 private:

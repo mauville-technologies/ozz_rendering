@@ -29,4 +29,17 @@ namespace OZZ::vk {
         CHECK_VK_RESULT(result, "Create semaphore");
         return semaphore;
     }
+
+    VkFence CreateFence(const VkDevice device, const VkFenceCreateFlags flags) {
+        VkFence fence;
+
+        VkFenceCreateInfo createInfo {
+            .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = flags,
+        };
+        const auto result = vkCreateFence(device, &createInfo, nullptr, &fence);
+        CHECK_VK_RESULT(result, "Create fence");
+        return fence;
+    }
 } // namespace OZZ::vk

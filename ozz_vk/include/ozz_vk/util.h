@@ -17,4 +17,5 @@
 namespace OZZ::vk {
     void BeginCommandBuffer(VkCommandBuffer commandBuffer, VkCommandBufferUsageFlags usageFlags);
     VkSemaphore CreateSemaphore(VkDevice device);
+    VkFence CreateFence(const VkDevice device, const VkFenceCreateFlags flags);
 } // namespace OZZ::vk
