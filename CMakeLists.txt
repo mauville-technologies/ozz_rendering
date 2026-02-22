@@ -20,12 +20,6 @@ FetchContent_Declare(
 
 FetchContent_MakeAvailable(glmlib)
 
-FetchContent_Declare(
-        spdloglib
-        GIT_REPOSITORY https://github.com/gabime/spdlog.git
-        GIT_TAG v1.15.0
-)
-FetchContent_MakeAvailable(spdloglib)
 
 add_executable(vulkan_playground main_again.cpp main.cpp)
 
@@ -36,7 +30,6 @@ target_link_libraries(${PROJECT_NAME}
         ozz_rendering
         glfw
         glm
-        spdlog
 )
 
 add_dependencies(${PROJECT_NAME} ${PROJECT_NAME}_CopyAssets)

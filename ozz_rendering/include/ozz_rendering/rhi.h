@@ -6,11 +6,28 @@
 
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <tuple>
 #include <vector>
 
 namespace OZZ::rendering {
+
+    template <typename ResourceType>
+    struct RHIHandle {
+        uint32_t Id {UINT32_MAX};
+        uint32_t Generation {0};
+
+        static RHIHandle<ResourceType> Null() {
+            return RHIHandle<ResourceType> {
+                .Id = UINT32_MAX,
+                .Generation = 0,
+            };
+        }
+    };
+
+    using RHITextureHandle = RHIHandle<struct TextureTag>;
+
     enum class RHIBackend {
         Auto,
         Vulkan,
@@ -45,6 +62,8 @@ namespace OZZ::rendering {
         // doing it this way will force the child classes to take in the platform context, which is necessary for
         // initialization, but allows the base class to be agnostic of the platform context details
         explicit RHIDevice(const PlatformContext&) {};
+
+        virtual RHITextureHandle CreateTexture() = 0;
     };
 
     std::unique_ptr<RHIDevice> CreateRHIDevice(const RHIInitParams&);

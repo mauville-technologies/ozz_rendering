@@ -2,6 +2,7 @@
 // Created by paulm on 2026-02-21.
 //
 
+#include "resource_pool.h"
 #include <ozz_rendering/rhi.h>
 
 #include "vulkan/rhi_device_vulkan.h"

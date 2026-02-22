@@ -4,6 +4,8 @@
 
 #include "rhi_device_vulkan.h"
 
+#include "utils/initialization.h"
+
 #include <algorithm>
 #include <ranges>
 #include <spdlog/spdlog.h>
@@ -34,7 +36,15 @@ namespace OZZ::rendering::vk {
         return VK_TRUE;
     }
 
-    RHIDeviceVulkan::RHIDeviceVulkan(const PlatformContext& context) : RHIDevice(context), platformContext(context) {
+    RHIDeviceVulkan::RHIDeviceVulkan(const PlatformContext& context)
+        : RHIDevice(context)
+        , platformContext(context)
+        , texturePool([](RHITextureVulkan& texture) {
+
+        }) {
+        texturePool = ResourcePool<struct TextureTag, RHITextureVulkan>([](RHITextureVulkan& texture) {
+
+        });
         auto result = volkInitialize();
         if (result != VK_SUCCESS) {
             spdlog::error("Failed to initialize volk");
@@ -44,7 +54,57 @@ namespace OZZ::rendering::vk {
         bIsValid = initialize();
     }
 
-    RHIDeviceVulkan::~RHIDeviceVulkan() {}
+    RHIDeviceVulkan::~RHIDeviceVulkan() {
+        if (commandBufferPool != VK_NULL_HANDLE) {
+            vkDestroyCommandPool(device, commandBufferPool, nullptr);
+            spdlog::trace("Destroyed command buffer pool");
+            commandBufferPool = VK_NULL_HANDLE;
+        }
+
+        for (auto imageView : swapchainImageViews) {
+            if (imageView != VK_NULL_HANDLE) {
+                vkDestroyImageView(device, imageView, nullptr);
+                imageView = VK_NULL_HANDLE;
+            }
+        }
+        swapchainImageViews.clear();
+
+        if (swapchain != VK_NULL_HANDLE) {
+            spdlog::trace("Swapchain destroyed");
+            vkDestroySwapchainKHR(device, swapchain, nullptr);
+            swapchain = VK_NULL_HANDLE;
+        }
+
+        if (device != VK_NULL_HANDLE) {
+            vkDestroyDevice(device, nullptr);
+            spdlog::trace("Logical device destroyed");
+            device = VK_NULL_HANDLE;
+        }
+
+        if (surface != VK_NULL_HANDLE) {
+            vkDestroySurfaceKHR(instance, surface, nullptr);
+            spdlog::trace("Surface destroyed");
+            surface = VK_NULL_HANDLE;
+        }
+
+        if (debugMessenger != VK_NULL_HANDLE) {
+            vkDestroyDebugUtilsMessengerEXT(instance, debugMessenger, nullptr);
+            spdlog::trace("Vulkan debug messenger destroyed");
+            debugMessenger = VK_NULL_HANDLE;
+        }
+
+        if (instance != VK_NULL_HANDLE) {
+            vkDestroyInstance(instance, nullptr);
+            spdlog::trace("Vulkan instance destroyed");
+            instance = VK_NULL_HANDLE;
+        }
+
+        spdlog::info("Tore down Vulkan RHI device");
+    }
+
+    RHITextureHandle RHIDeviceVulkan::CreateTexture() {
+        return RHITextureHandle::Null();
+    }
 
     bool RHIDeviceVulkan::initialize() {
         spdlog::info("Initializing Vulkan RHI device");
@@ -76,6 +136,16 @@ namespace OZZ::rendering::vk {
         }
 
         if (!createDevice()) {
+            failureMessage();
+            return false;
+        }
+
+        if (!createSwapchain()) {
+            failureMessage();
+            return false;
+        }
+
+        if (!createCommandBufferPool()) {
             failureMessage();
             return false;
         }
@@ -132,7 +202,6 @@ namespace OZZ::rendering::vk {
     }
 
     bool RHIDeviceVulkan::createDebugCallback() {
-
         VkDebugUtilsMessengerCreateInfoEXT messengerCreateInfo {
             .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT,
             .messageSeverity =
@@ -236,6 +305,104 @@ namespace OZZ::rendering::vk {
 
         spdlog::trace("Logical device created");
         volkLoadDevice(device);
+        return true;
+    }
+
+    bool RHIDeviceVulkan::createSwapchain() {
+        const VkSurfaceCapabilitiesKHR& surfaceCapabilities = physicalDevices.SelectedDevice().SurfaceCapabilities;
+        const uint32_t numImages = ChooseNumberOfSwapchainImages(surfaceCapabilities);
+
+        const std::vector<VkPresentModeKHR>& presentModes = physicalDevices.SelectedDevice().PresentModes;
+
+        // TODO: @paulm -- make the present mode a parameter that can be configured, and don't default to IMMEDIATE
+        VkPresentModeKHR presentMode = ChoosePresentMode(presentModes, VK_PRESENT_MODE_IMMEDIATE_KHR);
+
+        swapchainSurfaceFormat = ChooseSurfaceFormatAndColorSpace(physicalDevices.SelectedDevice().SurfaceFormats);
+
+        auto queueFamily = physicalDevices.SelectedQueueFamily();
+        VkSwapchainCreateInfoKHR swapchainCreateInfo {
+            .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
+            .flags = 0,
+            .surface = surface,
+            .minImageCount = numImages,
+            .imageFormat = swapchainSurfaceFormat.format,
+            .imageColorSpace = swapchainSurfaceFormat.colorSpace,
+            .imageExtent = surfaceCapabilities.currentExtent,
+            .imageArrayLayers = 1,
+            .imageUsage = (VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT),
+            .imageSharingMode = VK_SHARING_MODE_EXCLUSIVE,
+            .queueFamilyIndexCount = 1,
+            .pQueueFamilyIndices = &queueFamily,
+            .preTransform = surfaceCapabilities.currentTransform,
+            .compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
+            .presentMode = presentMode,
+            .clipped = VK_TRUE,
+        };
+
+        if (const auto result = vkCreateSwapchainKHR(device, &swapchainCreateInfo, nullptr, &swapchain);
+            result != VK_SUCCESS) {
+            spdlog::error("Failed to create swapchain, error code: {}", static_cast<int>(result));
+            return false;
+        }
+
+        spdlog::trace("Swapchain created");
+
+        uint32_t numSwapchainImages = 0;
+        if (const auto result = vkGetSwapchainImagesKHR(device, swapchain, &numSwapchainImages, nullptr);
+            result != VK_SUCCESS) {
+            spdlog::error("Failed to get swapchain image count, error code: {}", static_cast<int>(result));
+            return false;
+        }
+
+        if (numImages != numSwapchainImages) {
+            spdlog::error("Swapchain image count mismatch!");
+        }
+
+        spdlog::trace("Num swapchain images: {}", numSwapchainImages);
+        swapchainImages.resize(numSwapchainImages);
+        swapchainImageViews.resize(numSwapchainImages);
+
+        if (const auto result = vkGetSwapchainImagesKHR(device, swapchain, &numSwapchainImages, swapchainImages.data());
+            result != VK_SUCCESS) {
+            spdlog::error("Failed to get swapchain images, error code: {}", static_cast<int>(result));
+            return false;
+        }
+
+        for (auto i = 0; i < numSwapchainImages; i++) {
+            constexpr int mipLevels = 1;
+            constexpr int layerCount = 1;
+            const auto optIV = CreateImageView(device,
+                                               swapchainImages[i],
+                                               swapchainSurfaceFormat.format,
+                                               VK_IMAGE_ASPECT_COLOR_BIT,
+                                               VK_IMAGE_VIEW_TYPE_2D,
+                                               layerCount,
+                                               mipLevels);
+            if (!optIV.has_value()) {
+                spdlog::error("Failed to create image view for swapchain image {}", i);
+                return false;
+            }
+
+            swapchainImageViews[i] = optIV.value();
+        }
+        return true;
+    }
+
+    bool RHIDeviceVulkan::createCommandBufferPool() {
+        VkCommandPoolCreateInfo commandPoolCreateInfo {
+            .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .queueFamilyIndex = physicalDevices.SelectedQueueFamily(),
+        };
+
+        if (const auto result = vkCreateCommandPool(device, &commandPoolCreateInfo, nullptr, &commandBufferPool);
+            result != VK_SUCCESS) {
+            spdlog::error("Failed to create command buffer pool, error code: {}", static_cast<int>(result));
+            return false;
+        };
+
+        spdlog::trace("created command buffer pool");
         return true;
     }
 } // namespace OZZ::rendering::vk

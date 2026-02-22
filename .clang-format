@@ -11,7 +11,7 @@ AllowAllArgumentsOnNextLine: false
 BinPackArguments: false
 BinPackParameters: false
 AlignAfterOpenBracket: Align
-BreakConstructorInitializers: BeforeColon
+BreakConstructorInitializers: BeforeComma
 ConstructorInitializerIndentWidth: 4
 AlwaysBreakAfterDefinitionReturnType: None
 AlwaysBreakTemplateDeclarations: Yes

@@ -50,7 +50,10 @@ void OZZ::vk::VulkanCore::Init(const InitParams& initParams) {
     createSurface(initParams.SurfaceCreationFunction);
 
     physicalDevices.Init(instance, surface);
-    queueFamily = physicalDevices.SelectDevice(VK_QUEUE_GRAPHICS_BIT, true);
+    if (!physicalDevices.SelectDevice(VK_QUEUE_GRAPHICS_BIT, true)) {
+        spdlog::error("Failed to select device");
+    }
+    queueFamily = physicalDevices.SelectedQueueFamily();
     createDevice();
     createSwapchain();
     createCommandBufferPool();

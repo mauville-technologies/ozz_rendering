@@ -5,16 +5,8 @@ project(ozz_rendering)
 include(FetchContent)
 
 set(CMAKE_CXX_STANDARD 23)
-find_package(Vulkan REQUIRED COMPONENTS glslang)
 
-FetchContent_Declare(
-        volklib
-        GIT_REPOSITORY https://github.com/zeux/volk.git
-        GIT_TAG vulkan-sdk-1.4.341.0
-)
-
-FetchContent_MakeAvailable(volklib)
-
+add_subdirectory(third_party)
 set(SOURCES
         src/glslang/resources.cpp
 
@@ -26,14 +18,13 @@ set(SOURCES
 
         src/rhi.cpp
         src/vulkan/rhi_device_vulkan.cpp
+        src/vulkan/rhi_texture_vulkan.cpp
 )
 add_library(${PROJECT_NAME} STATIC ${SOURCES})
 
 target_link_libraries(${PROJECT_NAME}
         PUBLIC
-        Vulkan::glslang
-        spdlog
-        volk
+        ozz_rendering_third_party
 )
 
 target_include_directories(${PROJECT_NAME}
