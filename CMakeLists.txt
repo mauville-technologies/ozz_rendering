@@ -27,7 +27,7 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(spdloglib)
 
-add_executable(vulkan_playground main.cpp)
+add_executable(vulkan_playground main_again.cpp main.cpp)
 
 add_subdirectory(ozz_rendering)
 

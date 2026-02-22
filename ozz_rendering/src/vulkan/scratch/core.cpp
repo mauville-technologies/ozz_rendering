@@ -2,7 +2,7 @@
 // Created by paulm on 2026-02-10.
 //
 
-#include <ozz_rendering/core.h>
+#include <ozz_rendering/scratch/core.h>
 
 #include "volk.h"
 
@@ -11,7 +11,7 @@
 
 #include <spdlog/spdlog.h>
 
-#include "ozz_rendering/util.h"
+#include "ozz_rendering/scratch/util.h"
 
 static VKAPI_ATTR VkBool32 VKAPI_CALL DebugCallback(VkDebugUtilsMessageSeverityFlagBitsEXT severity,
                                                     VkDebugUtilsMessageTypeFlagsEXT type,
@@ -20,10 +20,10 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL DebugCallback(VkDebugUtilsMessageSeverityF
 
     switch (severity) {
         case VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT:
-            // spdlog::error(pCallbackData->pMessage);
+            spdlog::error(pCallbackData->pMessage);
             break;
         case VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT:
-            spdlog::debug(pCallbackData->pMessage);
+            spdlog::trace(pCallbackData->pMessage);
             break;
         case VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT:
             spdlog::warn(pCallbackData->pMessage);
@@ -245,11 +245,11 @@ void OZZ::vk::VulkanCore::createDevice() {
         VK_EXT_EXTENDED_DYNAMIC_STATE_3_EXTENSION_NAME,
     };
 
-    if (physicalDevices.Selected().Features.features.geometryShader == VK_FALSE) {
+    if (physicalDevices.SelectedDevice().Features.features.geometryShader == VK_FALSE) {
         spdlog::error("Geometry shaders not supported on selected physical device");
         exit(1);
     }
-    if (physicalDevices.Selected().Features.features.tessellationShader == VK_FALSE) {
+    if (physicalDevices.SelectedDevice().Features.features.tessellationShader == VK_FALSE) {
         spdlog::error("Tesselation shaders not supported on selected physical device");
         exit(1);
     }
@@ -286,7 +286,7 @@ void OZZ::vk::VulkanCore::createDevice() {
         .ppEnabledExtensionNames = deviceExtensions.data(),
         .pEnabledFeatures = nullptr,
     };
-    const auto result = vkCreateDevice(physicalDevices.Selected().Device, &deviceCreateInfo, nullptr, &device);
+    const auto result = vkCreateDevice(physicalDevices.SelectedDevice().Device, &deviceCreateInfo, nullptr, &device);
     CHECK_VK_RESULT(result, "create logical device");
 
     spdlog::info("Logical device created");
@@ -294,12 +294,12 @@ void OZZ::vk::VulkanCore::createDevice() {
 }
 
 void OZZ::vk::VulkanCore::createSwapchain() {
-    const VkSurfaceCapabilitiesKHR& surfaceCapabilities = physicalDevices.Selected().SurfaceCapabilities;
+    const VkSurfaceCapabilitiesKHR& surfaceCapabilities = physicalDevices.SelectedDevice().SurfaceCapabilities;
     const uint32_t numImages = chooseNumberOfSwapchainImages(surfaceCapabilities);
 
-    const std::vector<VkPresentModeKHR>& presentModes = physicalDevices.Selected().PresentModes;
+    const std::vector<VkPresentModeKHR>& presentModes = physicalDevices.SelectedDevice().PresentModes;
     VkPresentModeKHR presentMode = choosePresentMode(presentModes);
-    surfaceFormat = chooseSurfaceFormatAndColorSpace(physicalDevices.Selected().SurfaceFormats);
+    surfaceFormat = chooseSurfaceFormatAndColorSpace(physicalDevices.SelectedDevice().SurfaceFormats);
 
     VkSwapchainCreateInfoKHR swapchainCreateInfo {
         .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,

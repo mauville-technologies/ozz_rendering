@@ -2,9 +2,9 @@
 // Created by paulm on 2026-02-17.
 //
 
-#include "ozz_rendering/vulkan_shader.h"
+#include "../../../include/ozz_rendering/scratch/vulkan_shader.h"
 
-#include "ozz_rendering/util.h"
+#include "../../../include/ozz_rendering/scratch/util.h"
 #include "spdlog/spdlog.h"
 
 #include <fstream>

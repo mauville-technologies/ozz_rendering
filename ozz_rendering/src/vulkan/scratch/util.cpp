@@ -2,7 +2,7 @@
 // Created by paulm on 2026-02-10.
 //
 
-#include "ozz_rendering/util.h"
+#include "../../../include/ozz_rendering/scratch/util.h"
 
 namespace OZZ::vk {
     void BeginCommandBuffer(VkCommandBuffer commandBuffer, const VkCommandBufferUsageFlags usageFlags) {

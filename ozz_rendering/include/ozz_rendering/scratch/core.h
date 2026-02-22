@@ -3,7 +3,7 @@
 //
 
 #pragma once
-#include "physical_devices.h"
+#include "../../../src/vulkan/utils/physical_devices.h"
 #include "vulkan_queue.h"
 
 #include <functional>
@@ -59,7 +59,7 @@ namespace OZZ::vk {
         VkDebugUtilsMessengerEXT debugMessenger {VK_NULL_HANDLE};
         VkSurfaceKHR surface {VK_NULL_HANDLE};
 
-        PhysicalDevices physicalDevices;
+        RHIVulkanPhysicalDevices physicalDevices;
         uint32_t queueFamily;
         VkDevice device;
 

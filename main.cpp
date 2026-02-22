@@ -2,14 +2,14 @@
 #include <volk.h>
 
 #include <GLFW/glfw3.h>
-
-#include "ozz_rendering/core.h"
-#include "ozz_rendering/util.h"
-#include "ozz_rendering/vulkan_queue.h"
-#include "ozz_rendering/vulkan_shader.h"
-#include "spdlog/spdlog.h"
+#include <spdlog/spdlog.h>
 
 #include <filesystem>
+
+#include "ozz_rendering/include/ozz_rendering/scratch/core.h"
+#include "ozz_rendering/include/ozz_rendering/scratch/vulkan_shader.h"
+#include "ozz_rendering/scratch/util.h"
+#include "ozz_rendering/scratch/vulkan_queue.h"
 
 #define WINDOW_WIDTH 800
 #define WINDOW_HEIGHT 600
@@ -248,7 +248,8 @@ void GLFW_KeyCallback(GLFWwindow* window, int key, int scancode, int action, int
     }
 }
 
-int main() {
+int main2() {
+    spdlog::set_level(spdlog::level::trace);
     if (!glfwInit()) {
         return 1;
     }

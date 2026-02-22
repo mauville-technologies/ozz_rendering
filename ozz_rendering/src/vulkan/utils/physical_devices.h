@@ -18,17 +18,20 @@ struct PhysicalDevice {
     VkPhysicalDeviceFeatures2 Features {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
 };
 
-class PhysicalDevices {
+class RHIVulkanPhysicalDevices {
 public:
-    PhysicalDevices();
-    ~PhysicalDevices();
+    RHIVulkanPhysicalDevices();
+    ~RHIVulkanPhysicalDevices();
 
-    void Init(const VkInstance& instance, const VkSurfaceKHR& surface);
-    uint32_t SelectDevice(VkQueueFlags requiredQueueType, bool bSupportsPresent);
-    [[nodiscard]] const PhysicalDevice& Selected() const;
+    bool Init(const VkInstance& instance, const VkSurfaceKHR& surface);
+    bool SelectDevice(VkQueueFlags requiredQueueType, bool bSupportsPresent);
+    [[nodiscard]] const PhysicalDevice& SelectedDevice() const;
+
+    [[nodiscard]] uint32_t SelectedQueueFamily() const { return selectedQueueFamily; }
 
 private:
     std::vector<PhysicalDevice> devices;
 
     int selectedDevice = -1;
+    uint32_t selectedQueueFamily = UINT32_MAX;
 };

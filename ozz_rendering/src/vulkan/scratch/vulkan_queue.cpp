@@ -2,9 +2,9 @@
 // Created by paulm on 2026-02-15.
 //
 
-#include "ozz_rendering/vulkan_queue.h"
+#include "../../../include/ozz_rendering/scratch/vulkan_queue.h"
 
-#include "ozz_rendering/util.h"
+#include "../../../include/ozz_rendering/scratch/util.h"
 #include "spdlog/spdlog.h"
 
 void OZZ::vk::VulkanQueue::Init(VkDevice inDevice,
