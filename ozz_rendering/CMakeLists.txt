@@ -17,6 +17,7 @@ set(SOURCES
         src/vulkan/scratch/vulkan_shader.cpp
 
         src/rhi.cpp
+        src/vulkan/vma.cpp
         src/vulkan/rhi_device_vulkan.cpp
         src/vulkan/rhi_texture_vulkan.cpp
 )

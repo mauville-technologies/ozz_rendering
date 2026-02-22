@@ -45,6 +45,7 @@ namespace OZZ::rendering::vk {
         VkSurfaceKHR surface {VK_NULL_HANDLE};
         RHIVulkanPhysicalDevices physicalDevices;
         VkDevice device {VK_NULL_HANDLE};
+        VmaAllocator vmaAllocator {VK_NULL_HANDLE};
         VkSwapchainKHR swapchain {VK_NULL_HANDLE};
         VkCommandPool commandBufferPool {VK_NULL_HANDLE};
 
@@ -56,6 +57,7 @@ namespace OZZ::rendering::vk {
         std::vector<VkImageView> swapchainImageViews;
 
         // resource pools
-        ResourcePool<struct TextureTag, RHITextureVulkan> texturePool;
+        ResourcePool<TextureTag, RHITextureVulkan> texturePool;
+        ResourcePool<CommandBufferTag, VkCommandBuffer> commandBufferResourcePool;
     };
 } // namespace OZZ::rendering::vk

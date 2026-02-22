@@ -11,6 +11,8 @@
 #include <tuple>
 #include <vector>
 
+#include <ozz_rendering/rhi_renderpass.h>
+
 namespace OZZ::rendering {
 
     template <typename ResourceType>
@@ -27,6 +29,7 @@ namespace OZZ::rendering {
     };
 
     using RHITextureHandle = RHIHandle<struct TextureTag>;
+    using RHICommandBufferHandle = RHIHandle<struct CommandBufferTag>;
 
     enum class RHIBackend {
         Auto,
@@ -63,6 +66,21 @@ namespace OZZ::rendering {
         // initialization, but allows the base class to be agnostic of the platform context details
         explicit RHIDevice(const PlatformContext&) {};
 
+        // Frame commands
+        virtual RHICommandBufferHandle BeginFrame() = 0;
+        virtual void SubmitFrame(const RHICommandBufferHandle&) = 0;
+
+        // Commands
+        virtual void BeginRenderPass(const RHICommandBufferHandle&, const RenderPassDescriptor&) = 0;
+        virtual void EndRenderPass(const RHICommandBufferHandle&) = 0;
+
+        virtual void Draw(const RHICommandBufferHandle&,
+                          uint32_t vertexCount,
+                          uint32_t instanceCount,
+                          uint32_t firstVertex,
+                          uint32_t firstInstance) = 0;
+
+        // Resource creation
         virtual RHITextureHandle CreateTexture() = 0;
     };
 

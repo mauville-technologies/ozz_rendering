@@ -39,8 +39,21 @@ namespace OZZ::rendering::vk {
     RHIDeviceVulkan::RHIDeviceVulkan(const PlatformContext& context)
         : RHIDevice(context)
         , platformContext(context)
-        , texturePool([](RHITextureVulkan& texture) {
-
+        , texturePool([this](RHITextureVulkan& texture) {
+            // no allocation means something else owns this texture, so don't destroy it
+            // this is the case for swapchain images, which are owned by the swapchain and just wrapped in a texture for
+            // ease of use
+            if (texture.Allocation != VK_NULL_HANDLE) {
+                vkDestroyImageView(device, texture.ImageView, nullptr);
+                vmaDestroyImage(vmaAllocator, texture.Image, texture.Allocation);
+                texture.Image = VK_NULL_HANDLE;
+                texture.Allocation = VK_NULL_HANDLE;
+            }
+        })
+        , commandBufferResourcePool([this](VkCommandBuffer& commandBuffer) {
+            if (commandBufferPool) {
+                vkFreeCommandBuffers(device, commandBufferPool, 1, &commandBuffer);
+            }
         }) {
         texturePool = ResourcePool<struct TextureTag, RHITextureVulkan>([](RHITextureVulkan& texture) {
 
@@ -73,6 +86,12 @@ namespace OZZ::rendering::vk {
             spdlog::trace("Swapchain destroyed");
             vkDestroySwapchainKHR(device, swapchain, nullptr);
             swapchain = VK_NULL_HANDLE;
+        }
+
+        if (vmaAllocator != VK_NULL_HANDLE) {
+            vmaDestroyAllocator(vmaAllocator);
+            spdlog::trace("VMA allocator destroyed");
+            vmaAllocator = VK_NULL_HANDLE;
         }
 
         if (device != VK_NULL_HANDLE) {
@@ -136,6 +155,49 @@ namespace OZZ::rendering::vk {
         }
 
         if (!createDevice()) {
+            failureMessage();
+            return false;
+        }
+
+        VmaVulkanFunctions vulkanFunctions {
+            .vkGetInstanceProcAddr = vkGetInstanceProcAddr,
+            .vkGetDeviceProcAddr = vkGetDeviceProcAddr,
+            .vkGetPhysicalDeviceProperties = vkGetPhysicalDeviceProperties,
+            .vkGetPhysicalDeviceMemoryProperties = vkGetPhysicalDeviceMemoryProperties,
+            .vkAllocateMemory = vkAllocateMemory,
+            .vkFreeMemory = vkFreeMemory,
+            .vkMapMemory = vkMapMemory,
+            .vkUnmapMemory = vkUnmapMemory,
+            .vkFlushMappedMemoryRanges = vkFlushMappedMemoryRanges,
+            .vkInvalidateMappedMemoryRanges = vkInvalidateMappedMemoryRanges,
+            .vkBindBufferMemory = vkBindBufferMemory,
+            .vkBindImageMemory = vkBindImageMemory,
+            .vkGetBufferMemoryRequirements = vkGetBufferMemoryRequirements,
+            .vkGetImageMemoryRequirements = vkGetImageMemoryRequirements,
+            .vkCreateBuffer = vkCreateBuffer,
+            .vkDestroyBuffer = vkDestroyBuffer,
+            .vkCreateImage = vkCreateImage,
+            .vkDestroyImage = vkDestroyImage,
+            .vkCmdCopyBuffer = vkCmdCopyBuffer,
+            .vkGetBufferMemoryRequirements2KHR = vkGetBufferMemoryRequirements2,
+            .vkGetImageMemoryRequirements2KHR = vkGetImageMemoryRequirements2,
+            .vkBindBufferMemory2KHR = vkBindBufferMemory2,
+            .vkBindImageMemory2KHR = vkBindImageMemory2,
+            .vkGetPhysicalDeviceMemoryProperties2KHR = vkGetPhysicalDeviceMemoryProperties2,
+            .vkGetDeviceBufferMemoryRequirements = vkGetDeviceBufferMemoryRequirements,
+            .vkGetDeviceImageMemoryRequirements = vkGetDeviceImageMemoryRequirements,
+        };
+
+        VmaAllocatorCreateInfo allocatorCreateInfo {
+            .flags = 0,
+            .physicalDevice = physicalDevices.SelectedDevice().Device,
+            .device = device,
+            .pVulkanFunctions = &vulkanFunctions,
+            .instance = instance,
+            .vulkanApiVersion = VK_API_VERSION_1_3,
+        };
+        if (const auto result = vmaCreateAllocator(&allocatorCreateInfo, &vmaAllocator); result != VK_SUCCESS) {
+            spdlog::error("Failed to create VMA allocator for Vulkan RHI. Error: {}", static_cast<int>(result));
             failureMessage();
             return false;
         }
