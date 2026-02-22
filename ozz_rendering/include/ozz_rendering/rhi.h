@@ -6,30 +6,17 @@
 
 #include <functional>
 #include <memory>
-#include <optional>
 #include <string>
 #include <tuple>
 #include <vector>
 
+#include <ozz_rendering/rhi_barrier.h>
+#include <ozz_rendering/rhi_handle.h>
+#include <ozz_rendering/rhi_pipeline_state.h>
 #include <ozz_rendering/rhi_renderpass.h>
+#include <ozz_rendering/rhi_types.h>
 
 namespace OZZ::rendering {
-
-    template <typename ResourceType>
-    struct RHIHandle {
-        uint32_t Id {UINT32_MAX};
-        uint32_t Generation {0};
-
-        static RHIHandle<ResourceType> Null() {
-            return RHIHandle<ResourceType> {
-                .Id = UINT32_MAX,
-                .Generation = 0,
-            };
-        }
-    };
-
-    using RHITextureHandle = RHIHandle<struct TextureTag>;
-    using RHICommandBufferHandle = RHIHandle<struct CommandBufferTag>;
 
     enum class RHIBackend {
         Auto,
@@ -66,19 +53,37 @@ namespace OZZ::rendering {
         // initialization, but allows the base class to be agnostic of the platform context details
         explicit RHIDevice(const PlatformContext&) {};
 
-        // Frame commands
+        // Frame
         virtual RHICommandBufferHandle BeginFrame() = 0;
         virtual void SubmitFrame(const RHICommandBufferHandle&) = 0;
 
-        // Commands
+        // Render pass
         virtual void BeginRenderPass(const RHICommandBufferHandle&, const RenderPassDescriptor&) = 0;
         virtual void EndRenderPass(const RHICommandBufferHandle&) = 0;
 
+        // Resource barriers
+        virtual void ResourceBarrier(const RHICommandBufferHandle&, const TextureBarrierDescriptor&) = 0;
+
+        // Viewport / scissor
+        virtual void SetViewport(const RHICommandBufferHandle&, const Viewport&) = 0;
+        virtual void SetScissor(const RHICommandBufferHandle&, const Scissor&) = 0;
+
+        // Pipeline state
+        virtual void SetGraphicsState(const RHICommandBufferHandle&, const GraphicsStateDescriptor&) = 0;
+
+        // Draw
         virtual void Draw(const RHICommandBufferHandle&,
                           uint32_t vertexCount,
                           uint32_t instanceCount,
                           uint32_t firstVertex,
                           uint32_t firstInstance) = 0;
+
+        virtual void DrawIndexed(const RHICommandBufferHandle&,
+                                 uint32_t indexCount,
+                                 uint32_t instanceCount,
+                                 uint32_t firstIndex,
+                                 int32_t  vertexOffset,
+                                 uint32_t firstInstance) = 0;
 
         // Resource creation
         virtual RHITextureHandle CreateTexture() = 0;

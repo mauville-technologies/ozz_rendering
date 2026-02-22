@@ -17,6 +17,32 @@ namespace OZZ::rendering::vk {
         ~RHIDeviceVulkan() override;
 
         // rhi device interface
+        RHICommandBufferHandle BeginFrame() override;
+        void SubmitFrame(const RHICommandBufferHandle&) override;
+
+        void BeginRenderPass(const RHICommandBufferHandle&, const RenderPassDescriptor&) override;
+        void EndRenderPass(const RHICommandBufferHandle&) override;
+
+        void ResourceBarrier(const RHICommandBufferHandle&, const TextureBarrierDescriptor&) override;
+
+        void SetViewport(const RHICommandBufferHandle&, const Viewport&) override;
+        void SetScissor(const RHICommandBufferHandle&, const Scissor&) override;
+
+        void SetGraphicsState(const RHICommandBufferHandle&, const GraphicsStateDescriptor&) override;
+
+        void Draw(const RHICommandBufferHandle&,
+                  uint32_t vertexCount,
+                  uint32_t instanceCount,
+                  uint32_t firstVertex,
+                  uint32_t firstInstance) override;
+
+        void DrawIndexed(const RHICommandBufferHandle&,
+                         uint32_t indexCount,
+                         uint32_t instanceCount,
+                         uint32_t firstIndex,
+                         int32_t  vertexOffset,
+                         uint32_t firstInstance) override;
+
         RHITextureHandle CreateTexture() override;
 
     private:
