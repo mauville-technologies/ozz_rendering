@@ -80,13 +80,15 @@ private:
         VkClearValue clearValue;
         clearValue.color = clearColor;
 
-        VkImageMemoryBarrier presentToClearBarrier {
-            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+        VkImageMemoryBarrier2 presentToClearBarrier {
+            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
             .pNext = nullptr,
+            .srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
             .srcAccessMask = 0,
+            .dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
             .dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
             .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-            .newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+            .newLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
             .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
             .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
             .image = VK_NULL_HANDLE,
@@ -100,10 +102,24 @@ private:
                 },
         };
 
-        VkImageMemoryBarrier clearToPresentImageBarrier {
-            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+        VkDependencyInfo presentToClearDependency {
+            .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
             .pNext = nullptr,
+            .dependencyFlags = 0,
+            .memoryBarrierCount = 0,
+            .pMemoryBarriers = nullptr,
+            .bufferMemoryBarrierCount = 0,
+            .pBufferMemoryBarriers = nullptr,
+            .imageMemoryBarrierCount = 1,
+            .pImageMemoryBarriers = &presentToClearBarrier,
+        };
+
+        VkImageMemoryBarrier2 clearToPresentImageBarrier {
+            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+            .pNext = nullptr,
+            .srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
             .srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+            .dstStageMask = VK_PIPELINE_STAGE_NONE,
             .dstAccessMask = 0,
             .oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
             .newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
@@ -119,22 +135,26 @@ private:
                     .layerCount = 1,
                 },
         };
+
+        VkDependencyInfo clearToPresentDependency {
+            .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+            .pNext = nullptr,
+            .dependencyFlags = 0,
+            .memoryBarrierCount = 0,
+            .pMemoryBarriers = nullptr,
+            .bufferMemoryBarrierCount = 0,
+            .pBufferMemoryBarriers = nullptr,
+            .imageMemoryBarrierCount = 1,
+            .pImageMemoryBarriers = &clearToPresentImageBarrier,
+        };
+
         int i = 0;
         for (const auto commandBuffer : commandBuffers) {
             OZZ::vk::BeginCommandBuffer(commandBuffer, 0);
 
             presentToClearBarrier.image = vkCore.GetSwapchainImage(i);
 
-            vkCmdPipelineBarrier(commandBuffer,
-                                 VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                                 VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                                 0,
-                                 0,
-                                 nullptr,
-                                 0,
-                                 nullptr,
-                                 1,
-                                 &presentToClearBarrier);
+            vkCmdPipelineBarrier2(commandBuffer, &presentToClearDependency);
 
             // transition to color attachment optimal
             VkRenderingAttachmentInfo colorAttachment {
@@ -213,16 +233,7 @@ private:
 
             clearToPresentImageBarrier.image = vkCore.GetSwapchainImage(i);
 
-            vkCmdPipelineBarrier(commandBuffer,
-                                 VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-                                 VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
-                                 0,
-                                 0,
-                                 nullptr,
-                                 0,
-                                 nullptr,
-                                 1,
-                                 &clearToPresentImageBarrier);
+            vkCmdPipelineBarrier2(commandBuffer, &clearToPresentDependency);
             const auto result = vkEndCommandBuffer(commandBuffer);
             CHECK_VK_RESULT(result, "End command buffer");
             i++;
@@ -248,7 +259,7 @@ void GLFW_KeyCallback(GLFWwindow* window, int key, int scancode, int action, int
     }
 }
 
-int main2() {
+int main() {
     spdlog::set_level(spdlog::level::trace);
     if (!glfwInit()) {
         return 1;

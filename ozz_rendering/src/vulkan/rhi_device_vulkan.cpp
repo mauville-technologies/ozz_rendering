@@ -491,14 +491,16 @@ namespace OZZ::rendering::vk {
             spdlog::error("Geometry shaders not supported on selected physical device");
             exit(1);
         }
-        // if (physicalDevices.SelectedDevice().Features.features.tessellationShader == VK_FALSE) {
-        //     spdlog::error("Tesselation shaders not supported on selected physical device");
-        //     exit(1);
-        // }
+
+        VkPhysicalDeviceSynchronization2Features synchronization2Features {
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SYNCHRONIZATION_2_FEATURES,
+            .pNext = nullptr,
+            .synchronization2 = VK_TRUE,
+        };
 
         VkPhysicalDeviceShaderObjectFeaturesEXT shaderObjectFeatures {
             .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_OBJECT_FEATURES_EXT,
-            .pNext = nullptr,
+            .pNext = &synchronization2Features,
             .shaderObject = VK_TRUE,
         };
 
@@ -517,7 +519,6 @@ namespace OZZ::rendering::vk {
             .features =
                 VkPhysicalDeviceFeatures {
                     .geometryShader = VK_TRUE,
-                    // .tessellationShader = VK_TRUE,
                 },
         };
 
