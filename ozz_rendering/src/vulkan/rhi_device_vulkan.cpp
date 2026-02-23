@@ -269,9 +269,94 @@ namespace OZZ::rendering::vk {
         currentFrame = (currentFrame + 1) % framesInFlight;
     }
 
-    void RHIDeviceVulkan::BeginRenderPass(const RHICommandBufferHandle&, const RenderPassDescriptor&) {}
+    void RHIDeviceVulkan::BeginRenderPass(const RHICommandBufferHandle& commandBufferHandle,
+                                          const RenderPassDescriptor& renderPassDescriptor) {
+        std::vector<VkRenderingAttachmentInfo> colorAttachments;
+        bool bHasDepthStencilAttachment = false;
+        VkRenderingAttachmentInfo depthStencilAttachment;
 
-    void RHIDeviceVulkan::EndRenderPass(const RHICommandBufferHandle&) {}
+        for (auto i = 0u; i < renderPassDescriptor.ColorAttachmentCount; i++) {
+            const auto& attachment = renderPassDescriptor.ColorAttachments[i];
+            if (attachment.Texture == RHITextureHandle::Null()) {
+                spdlog::error("Color attachment {} is null in BeginRenderPass", i);
+                continue;
+            }
+            VkClearValue clearValue;
+            const auto* texture = texturePool.Get(attachment.Texture);
+            if (attachment.Layout == TextureLayout::ColorAttachment) {
+                clearValue.color = {
+                    attachment.Clear.R,
+                    attachment.Clear.G,
+                    attachment.Clear.B,
+                    attachment.Clear.A,
+                };
+            }
+            if (attachment.Layout == TextureLayout::DepthStencilAttachment) {
+                clearValue = VkClearValue {
+                    .depthStencil =
+                        {
+                            .depth = attachment.Clear.Depth,
+                            .stencil = attachment.Clear.Stencil,
+                        },
+                };
+            }
+
+            VkRenderingAttachmentInfo attachmentInfo {
+                .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+                .pNext = nullptr,
+                .imageView = texture->ImageView,
+                .imageLayout = ConvertTextureLayoutToVulkan(attachment.Layout),
+                .loadOp = ConvertLoadOpToVulkan(attachment.Load),
+                .storeOp = ConvertStoreOpToVulkan(attachment.Store),
+                .clearValue = clearValue,
+            };
+
+            if (attachment.Layout == TextureLayout::DepthStencilAttachment) {
+                // TODO: implement this when needed
+                // bHasDepthStencilAttachment = true;
+                // depthStencilAttachment = attachmentInfo;
+                // depthStencilAttachment.imageLayout =
+                //     ConvertTextureLayoutToVulkan(TextureLayout::DepthStencilAttachment);
+                // depthStencilAttachment.loadOp = ConvertLoadOpToVulkan(attachment.Load);
+                // depthStencilAttachment.storeOp = ConvertStoreOpToVulkan(attachment.Store);
+                assert(false && "Depth stencil attachments not implemented!!");
+            } else {
+                colorAttachments.emplace_back(attachmentInfo);
+            }
+        }
+
+        VkRenderingInfo renderingInfo {
+            .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .renderArea =
+                {
+                    .offset =
+                        {
+                            .x = renderPassDescriptor.RenderArea.X,
+                            .y = renderPassDescriptor.RenderArea.Y,
+                        },
+                    .extent =
+                        {
+                            .width = renderPassDescriptor.RenderArea.Width,
+                            .height = renderPassDescriptor.RenderArea.Height,
+                        },
+                },
+            .layerCount = 1,
+            .colorAttachmentCount = static_cast<uint32_t>(colorAttachments.size()),
+            .pColorAttachments = colorAttachments.data(),
+            .pDepthAttachment = bHasDepthStencilAttachment ? &depthStencilAttachment : nullptr,
+            .pStencilAttachment = bHasDepthStencilAttachment ? &depthStencilAttachment : nullptr,
+        };
+
+        const auto commandBuffer = *commandBufferResourcePool.Get(commandBufferHandle);
+        vkCmdBeginRendering(commandBuffer, &renderingInfo);
+    }
+
+    void RHIDeviceVulkan::EndRenderPass(const RHICommandBufferHandle& commandBufferHandle) {
+        const auto commandBuffer = *commandBufferResourcePool.Get(commandBufferHandle);
+        vkCmdEndRendering(commandBuffer);
+    }
 
     void RHIDeviceVulkan::TextureResourceBarrier(const RHICommandBufferHandle& cbHandle,
                                                  const TextureBarrierDescriptor& barrierDescriptor) {

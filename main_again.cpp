@@ -13,6 +13,35 @@
 
 #include <cstdlib>
 
+OZZ::rendering::RenderPassDescriptor renderPassDescriptor {
+    .ColorAttachments =
+        {
+            OZZ::rendering::AttachmentDescriptor {
+                .Load = OZZ::rendering::LoadOp::Clear,
+                .Store = OZZ::rendering::StoreOp::Store,
+                .Clear =
+                    {
+                        .R = 0.3f,
+                        .G = 0.1f,
+                        .B = 0.1f,
+                        .A = 1.f,
+                    },
+                .Layout = OZZ::rendering::TextureLayout::ColorAttachment,
+            },
+        },
+    .ColorAttachmentCount = 1,
+    .DepthAttachment = {},
+    .StencilAttachment = {},
+    .RenderArea =
+        {
+            .X = 0,
+            .Y = 0,
+            .Width = WINDOW_WIDTH,
+            .Height = WINDOW_HEIGHT,
+        },
+    .LayerCount = 1,
+};
+
 void GLFW_KeyCallback2(GLFWwindow* window, int key, int scancode, int action, int mods) {
     if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS) {
         glfwSetWindowShouldClose(window, GLFW_TRUE);
@@ -86,6 +115,15 @@ int main() {
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
         auto context = rhiDevice->BeginFrame();
+        renderPassDescriptor.ColorAttachments[0].Texture = context.GetBackbuffer();
+        rhiDevice->BeginRenderPass(context.GetCommandBuffer(), renderPassDescriptor);
+        rhiDevice->SetGraphicsState(context.GetCommandBuffer(), {});
+
+        // Bind material
+
+        rhiDevice->Draw(context.GetCommandBuffer(), 3, 1, 0, 0);
+
+        rhiDevice->EndRenderPass(context.GetCommandBuffer());
         rhiDevice->SubmitAndPresentFrame(std::move(context));
     }
 

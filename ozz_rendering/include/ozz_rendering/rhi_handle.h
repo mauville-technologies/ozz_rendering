@@ -20,6 +20,8 @@ namespace OZZ::rendering {
             };
         }
 
+        bool operator==(const RHIHandle& other) const { return Id == other.Id && Generation == other.Generation; }
+
         [[nodiscard]] bool IsValid() const { return Id != UINT32_MAX; }
     };
 

@@ -73,4 +73,26 @@ namespace OZZ::rendering::vk {
 
         return VK_IMAGE_ASPECT_FLAG_BITS_MAX_ENUM;
     }
+
+    inline VkAttachmentLoadOp ConvertLoadOpToVulkan(const LoadOp loadOp) {
+        switch (loadOp) {
+            case LoadOp::DontCare:
+                return VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+            case LoadOp::Load:
+                return VK_ATTACHMENT_LOAD_OP_LOAD;
+            case LoadOp::Clear:
+                return VK_ATTACHMENT_LOAD_OP_CLEAR;
+        }
+        return VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    }
+
+    inline VkAttachmentStoreOp ConvertStoreOpToVulkan(const StoreOp storeOp) {
+        switch (storeOp) {
+            case StoreOp::DontCare:
+                return VK_ATTACHMENT_STORE_OP_DONT_CARE;
+            case StoreOp::Store:
+                return VK_ATTACHMENT_STORE_OP_STORE;
+        }
+        return VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    }
 } // namespace OZZ::rendering::vk
