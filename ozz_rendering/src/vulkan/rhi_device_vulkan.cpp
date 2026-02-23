@@ -68,11 +68,42 @@ namespace OZZ::rendering::vk {
     }
 
     RHIDeviceVulkan::~RHIDeviceVulkan() {
+        if (graphicsQueue != VK_NULL_HANDLE) {
+            vkQueueWaitIdle(graphicsQueue);
+            graphicsQueue = VK_NULL_HANDLE;
+        }
+
+        for (auto& context : submissionContexts) {
+            if (context.InFlightFence != VK_NULL_HANDLE) {
+                vkDestroyFence(device, context.InFlightFence, nullptr);
+                context.InFlightFence = VK_NULL_HANDLE;
+            }
+            if (context.AcquireImageSemaphore != VK_NULL_HANDLE) {
+                vkDestroySemaphore(device, context.AcquireImageSemaphore, nullptr);
+                context.AcquireImageSemaphore = VK_NULL_HANDLE;
+            }
+
+            if (context.CommandBuffer.IsValid()) {
+                commandBufferResourcePool.Free(context.CommandBuffer);
+                context.CommandBuffer = RHICommandBufferHandle::Null();
+            }
+        }
+        submissionContexts.clear();
+        spdlog::trace("cleared submission contexts");
+
         if (commandBufferPool != VK_NULL_HANDLE) {
             vkDestroyCommandPool(device, commandBufferPool, nullptr);
             spdlog::trace("Destroyed command buffer pool");
             commandBufferPool = VK_NULL_HANDLE;
         }
+
+        for (auto semaphore : presentCompleteSemaphores) {
+            if (semaphore != VK_NULL_HANDLE) {
+                vkDestroySemaphore(device, semaphore, nullptr);
+                semaphore = VK_NULL_HANDLE;
+            }
+        }
+        presentCompleteSemaphores.clear();
 
         for (auto imageView : swapchainImageViews) {
             if (imageView != VK_NULL_HANDLE) {
@@ -120,6 +151,138 @@ namespace OZZ::rendering::vk {
 
         spdlog::info("Tore down Vulkan RHI device");
     }
+
+    FrameContext RHIDeviceVulkan::BeginFrame() {
+        const auto& submissionContext = submissionContexts[currentFrame];
+        if (const auto fenceResult = vkWaitForFences(device, 1, &submissionContext.InFlightFence, VK_TRUE, UINT64_MAX);
+            fenceResult != VK_SUCCESS) {
+            spdlog::error("Failed to wait for fence in BeginFrame. Error: {}", static_cast<int>(fenceResult));
+            return FrameContext::Null();
+        }
+
+        vkResetFences(device, 1, &submissionContext.InFlightFence);
+
+        uint32_t imageIndex;
+
+        if (const auto result = vkAcquireNextImageKHR(device,
+                                                      swapchain,
+                                                      UINT64_MAX,
+                                                      submissionContext.AcquireImageSemaphore,
+                                                      VK_NULL_HANDLE,
+                                                      &imageIndex);
+            result != VK_SUCCESS) {
+            spdlog::error("Failed to acquire next image in BeginFrame. Error: {}", static_cast<int>(result));
+            return FrameContext::Null();
+        }
+
+        const auto commandBuffer = commandBufferResourcePool.Get(submissionContext.CommandBuffer);
+
+        VkCommandBufferBeginInfo VkCommandBufferBeginInfo {
+            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+            .pNext = nullptr,
+            .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+            .pInheritanceInfo = nullptr,
+        };
+
+        if (const auto result = vkBeginCommandBuffer(*commandBuffer, &VkCommandBufferBeginInfo); result != VK_SUCCESS) {
+            spdlog::error("Failed to begin command buffer in BeginFrame. Error: {}", static_cast<int>(result));
+            return FrameContext::Null();
+        }
+
+        ResourceBarrier(submissionContext.CommandBuffer,
+                        TextureBarrierDescriptor {
+                            .Texture = swapchainTextureHandles[imageIndex],
+                            .OldLayout = TextureLayout::Undefined,
+                            .NewLayout = TextureLayout::ColorAttachment,
+                        });
+
+        return BuildFrameContext(submissionContext.CommandBuffer,
+                                 swapchainTextureHandles[imageIndex],
+                                 imageIndex,
+                                 currentFrame);
+    }
+
+    void RHIDeviceVulkan::SubmitAndPresentFrame(FrameContext context) {
+        // Prepare swapchain image for presentation
+        const auto imageIndex = GetImageIndexFromFrameContext(context);
+        ResourceBarrier(context.GetCommandBuffer(),
+                        TextureBarrierDescriptor {
+                            .Texture = swapchainTextureHandles[imageIndex],
+                            .OldLayout = TextureLayout::ColorAttachment,
+                            .NewLayout = TextureLayout::Present,
+                        });
+
+        auto commandBuffer = commandBufferResourcePool.Get(context.GetCommandBuffer());
+        if (const auto result = vkEndCommandBuffer(*commandBuffer); result != VK_SUCCESS) {
+            spdlog::error("Failed to end command buffer in SubmitFrame. Error: {}", static_cast<int>(result));
+            return;
+        }
+
+        auto& submissionContext = submissionContexts[GetFrameNumberFromFrameContext(context)];
+        VkPipelineStageFlags waitFlags {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
+        VkSubmitInfo submitInfo {
+            .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+            .pNext = nullptr,
+            .waitSemaphoreCount = 1,
+            .pWaitSemaphores = &submissionContext.AcquireImageSemaphore,
+            .pWaitDstStageMask = &waitFlags,
+            .commandBufferCount = 1,
+            .pCommandBuffers = commandBuffer,
+            .signalSemaphoreCount = 1,
+            .pSignalSemaphores = &presentCompleteSemaphores[imageIndex],
+        };
+
+        if (const auto result = vkQueueSubmit(graphicsQueue, 1, &submitInfo, submissionContext.InFlightFence)) {
+            spdlog::error("Failed to submit command buffer in SubmitFrame. Error: {} | {} / {} | {:x}",
+                          static_cast<int>(result),
+                          imageIndex,
+                          currentFrame,
+                          reinterpret_cast<uint64_t>(presentCompleteSemaphores[imageIndex]));
+            return;
+        }
+
+        VkPresentInfoKHR presentInfo {
+            .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
+            .pNext = nullptr,
+            .waitSemaphoreCount = 1,
+            .pWaitSemaphores = &presentCompleteSemaphores[imageIndex],
+            .swapchainCount = 1,
+            .pSwapchains = &swapchain,
+            .pImageIndices = &imageIndex,
+            .pResults = VK_NULL_HANDLE,
+        };
+
+        if (const auto result = vkQueuePresentKHR(graphicsQueue, &presentInfo); result != VK_SUCCESS) {
+            spdlog::error("Failed to present frame in SubmitFrame. Error: {}", static_cast<int>(result));
+        }
+
+        currentFrame = (currentFrame + 1) % framesInFlight;
+    }
+
+    void RHIDeviceVulkan::BeginRenderPass(const RHICommandBufferHandle&, const RenderPassDescriptor&) {}
+
+    void RHIDeviceVulkan::EndRenderPass(const RHICommandBufferHandle&) {}
+
+    void RHIDeviceVulkan::ResourceBarrier(const RHICommandBufferHandle&, const TextureBarrierDescriptor&) {}
+
+    void RHIDeviceVulkan::SetViewport(const RHICommandBufferHandle&, const Viewport&) {}
+
+    void RHIDeviceVulkan::SetScissor(const RHICommandBufferHandle&, const Scissor&) {}
+
+    void RHIDeviceVulkan::SetGraphicsState(const RHICommandBufferHandle&, const GraphicsStateDescriptor&) {}
+
+    void RHIDeviceVulkan::Draw(const RHICommandBufferHandle&,
+                               uint32_t vertexCount,
+                               uint32_t instanceCount,
+                               uint32_t firstVertex,
+                               uint32_t firstInstance) {}
+
+    void RHIDeviceVulkan::DrawIndexed(const RHICommandBufferHandle&,
+                                      uint32_t indexCount,
+                                      uint32_t instanceCount,
+                                      uint32_t firstIndex,
+                                      int32_t vertexOffset,
+                                      uint32_t firstInstance) {}
 
     RHITextureHandle RHIDeviceVulkan::CreateTexture() {
         return RHITextureHandle::Null();
@@ -208,6 +371,16 @@ namespace OZZ::rendering::vk {
         }
 
         if (!createCommandBufferPool()) {
+            failureMessage();
+            return false;
+        }
+
+        if (!createSubmissionContexts()) {
+            failureMessage();
+            return false;
+        }
+
+        if (!initializeQueue()) {
             failureMessage();
             return false;
         }
@@ -447,6 +620,39 @@ namespace OZZ::rendering::vk {
 
             swapchainImageViews[i] = optIV.value();
         }
+
+        // Let's put these in the texturepool
+        presentCompleteSemaphores.resize(numSwapchainImages);
+        for (auto i = 0; i < numSwapchainImages; i++) {
+            RHITextureVulkan texture {
+                .Image = swapchainImages[i],
+                .ImageView = swapchainImageViews[i],
+                .Allocation = VK_NULL_HANDLE,
+            };
+            const auto handle = texturePool.Allocate(std::move(texture));
+            if (!handle.IsValid()) {
+                spdlog::error("Failed to allocate texture for swapchain image {}", i);
+                return false;
+            }
+
+            swapchainTextureHandles.push_back(handle);
+
+            VkSemaphoreCreateInfo semaphoreCreateInfo {
+                .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
+                .pNext = nullptr,
+                .flags = 0,
+            };
+
+            if (const auto result =
+                    vkCreateSemaphore(device, &semaphoreCreateInfo, nullptr, &presentCompleteSemaphores[i]);
+                result != VK_SUCCESS) {
+                spdlog::error("Failed to create present complete semaphore for swapchain image {}, error code: {}",
+                              i,
+                              static_cast<int>(result));
+                return false;
+            }
+        }
+
         return true;
     }
 
@@ -454,7 +660,7 @@ namespace OZZ::rendering::vk {
         VkCommandPoolCreateInfo commandPoolCreateInfo {
             .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
             .pNext = nullptr,
-            .flags = 0,
+            .flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT | VK_COMMAND_POOL_CREATE_TRANSIENT_BIT,
             .queueFamilyIndex = physicalDevices.SelectedQueueFamily(),
         };
 
@@ -465,6 +671,73 @@ namespace OZZ::rendering::vk {
         };
 
         spdlog::trace("created command buffer pool");
+        return true;
+    }
+
+    bool RHIDeviceVulkan::createSubmissionContexts() {
+        framesInFlight = std::min(MaxFramesInFlight, static_cast<uint32_t>(swapchainImages.size()));
+
+        submissionContexts.resize(framesInFlight);
+
+        std::vector<VkCommandBuffer> commandBuffers(framesInFlight);
+        VkCommandBufferAllocateInfo commandBufferAllocateInfo {
+            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+            .commandPool = commandBufferPool,
+            .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+            .commandBufferCount = framesInFlight,
+        };
+
+        if (const auto result = vkAllocateCommandBuffers(device, &commandBufferAllocateInfo, commandBuffers.data());
+            result != VK_SUCCESS) {
+            spdlog::error("Failed to allocate command buffers for submission contexts, error code: {}",
+                          static_cast<int>(result));
+            return false;
+        }
+
+        for (auto i = 0U; i < framesInFlight; i++) {
+            VkSemaphoreCreateInfo semaphoreCreateInfo {
+                .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
+                .pNext = nullptr,
+                .flags = 0,
+            };
+            if (const auto result = vkCreateSemaphore(device,
+                                                      &semaphoreCreateInfo,
+                                                      nullptr,
+                                                      &submissionContexts[i].AcquireImageSemaphore);
+                result != VK_SUCCESS) {
+                spdlog::error("Failed to create present complete semaphore for submission context {}, error code: {}",
+                              i,
+                              static_cast<int>(result));
+                return false;
+            }
+
+            VkFenceCreateInfo fenceCreateInfo {
+                .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
+                .pNext = nullptr,
+                .flags = VK_FENCE_CREATE_SIGNALED_BIT,
+            };
+
+            if (const auto result =
+                    vkCreateFence(device, &fenceCreateInfo, nullptr, &submissionContexts[i].InFlightFence);
+                result != VK_SUCCESS) {
+                spdlog::error("Failed to create render fence for submission context {}, error code: {}",
+                              i,
+                              static_cast<int>(result));
+                return false;
+            }
+
+            auto handle = commandBufferResourcePool.Allocate(std::move(commandBuffers[i]));
+            if (!handle.IsValid()) {
+                spdlog::error("Failed to allocate command buffer for submission context {}", i);
+                return false;
+            }
+            submissionContexts[i].CommandBuffer = handle;
+        }
+        return true;
+    }
+
+    bool RHIDeviceVulkan::initializeQueue() {
+        vkGetDeviceQueue(device, physicalDevices.SelectedQueueFamily(), 0, &graphicsQueue);
         return true;
     }
 } // namespace OZZ::rendering::vk

@@ -14,7 +14,7 @@ namespace OZZ::rendering {
     template <typename ResourceType>
     struct ResourcePoolSlot {
         std::optional<ResourceType> Resource;
-        uint64_t Generation {0};
+        uint32_t Generation {0};
 
         [[nodiscard]] bool Occupied() const { return Resource.has_value(); }
     };
@@ -23,7 +23,8 @@ namespace OZZ::rendering {
     struct ResourcePool {
         using DestroyFunction = std::function<void(ResourceType&)>;
 
-        explicit ResourcePool(DestroyFunction destroyFunc) : destroyFunction(std::move(destroyFunc)) {}
+        explicit ResourcePool(DestroyFunction destroyFunc)
+            : destroyFunction(std::move(destroyFunc)) {}
 
         std::vector<ResourcePoolSlot<ResourceType>> Slots;
         std::vector<uint32_t> FreeIndices;

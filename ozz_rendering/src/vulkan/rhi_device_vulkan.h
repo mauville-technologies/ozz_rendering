@@ -11,14 +11,24 @@
 #include <volk.h>
 
 namespace OZZ::rendering::vk {
+    constexpr uint32_t MaxFramesInFlight = 2;
+
+    struct SubmissionContext {
+        VkSemaphore AcquireImageSemaphore {VK_NULL_HANDLE};
+        // VkSemaphore RenderCompleteSemaphore {VK_NULL_HANDLE};
+        VkFence InFlightFence {VK_NULL_HANDLE};
+
+        RHICommandBufferHandle CommandBuffer {};
+    };
+
     class RHIDeviceVulkan : public RHIDevice {
     public:
         explicit RHIDeviceVulkan(const PlatformContext& context);
         ~RHIDeviceVulkan() override;
 
-        // rhi device interface
-        RHICommandBufferHandle BeginFrame() override;
-        void SubmitFrame(const RHICommandBufferHandle&) override;
+        // RHI Commands
+        FrameContext BeginFrame() override;
+        void SubmitAndPresentFrame(FrameContext) override;
 
         void BeginRenderPass(const RHICommandBufferHandle&, const RenderPassDescriptor&) override;
         void EndRenderPass(const RHICommandBufferHandle&) override;
@@ -40,9 +50,10 @@ namespace OZZ::rendering::vk {
                          uint32_t indexCount,
                          uint32_t instanceCount,
                          uint32_t firstIndex,
-                         int32_t  vertexOffset,
+                         int32_t vertexOffset,
                          uint32_t firstInstance) override;
 
+        // Resource creation
         RHITextureHandle CreateTexture() override;
 
     private:
@@ -53,11 +64,16 @@ namespace OZZ::rendering::vk {
         bool createDevice();
         bool createSwapchain();
         bool createCommandBufferPool();
+        bool createSubmissionContexts();
+        bool initializeQueue();
 
     private:
         PlatformContext platformContext;
 
         bool bIsValid {false};
+
+        uint8_t framesInFlight {0};
+        uint64_t currentFrame {0};
 
         /**
          * Vulkan Primitives
@@ -74,6 +90,7 @@ namespace OZZ::rendering::vk {
         VmaAllocator vmaAllocator {VK_NULL_HANDLE};
         VkSwapchainKHR swapchain {VK_NULL_HANDLE};
         VkCommandPool commandBufferPool {VK_NULL_HANDLE};
+        VkQueue graphicsQueue {VK_NULL_HANDLE};
 
         /**
          * Swapchain Vulkan objects
@@ -81,6 +98,13 @@ namespace OZZ::rendering::vk {
         VkSurfaceFormatKHR swapchainSurfaceFormat {};
         std::vector<VkImage> swapchainImages;
         std::vector<VkImageView> swapchainImageViews;
+        std::vector<RHITextureHandle> swapchainTextureHandles;
+        std::vector<VkSemaphore> presentCompleteSemaphores;
+
+        /**
+         * Sync objects
+         */
+        std::vector<SubmissionContext> submissionContexts;
 
         // resource pools
         ResourcePool<TextureTag, RHITextureVulkan> texturePool;

@@ -43,19 +43,47 @@ namespace OZZ::rendering {
         PlatformContext Context {};
     };
 
+    class FrameContext {
+    public:
+        // Only thing app-level renderables can do:
+        RHICommandBufferHandle GetCommandBuffer() { return commandBuffer; }
+
+        RHITextureHandle GetBackbuffer() { return backbuffer; }
+
+        // Non-copyable - one frame in flight at a time
+        FrameContext(const FrameContext&) = delete;
+        FrameContext& operator=(const FrameContext&) = delete;
+        FrameContext(FrameContext&&) = default;
+
+        [[nodiscard]] bool IsValid() const { return commandBuffer.IsValid() && backbuffer.IsValid(); }
+
+        static FrameContext Null() { return {RHICommandBufferHandle::Null(), RHITextureHandle::Null(), 0, 0}; }
+
+    private:
+        // Only RHIDevice can construct this
+        friend class RHIDevice;
+
+        FrameContext(RHICommandBufferHandle cmd, RHITextureHandle backbuffer, uint32_t imageIndex, uint32_t frameIndex)
+            : commandBuffer(cmd)
+            , backbuffer(backbuffer)
+            , imageIndex(imageIndex)    // hidden from app
+            , frameIndex(frameIndex) {} // hidden from app
+
+        RHICommandBufferHandle commandBuffer;
+        RHITextureHandle backbuffer;
+
+        uint32_t imageIndex; // raw swapchain index - internal only
+        uint32_t frameIndex; // frame-in-flight index - internal only
+    };
+
     class RHIDevice {
     public:
         virtual ~RHIDevice() = default;
         RHIDevice() = delete;
 
-    protected:
-        // doing it this way will force the child classes to take in the platform context, which is necessary for
-        // initialization, but allows the base class to be agnostic of the platform context details
-        explicit RHIDevice(const PlatformContext&) {};
-
         // Frame
-        virtual RHICommandBufferHandle BeginFrame() = 0;
-        virtual void SubmitFrame(const RHICommandBufferHandle&) = 0;
+        virtual FrameContext BeginFrame() = 0;
+        virtual void SubmitAndPresentFrame(FrameContext) = 0;
 
         // Render pass
         virtual void BeginRenderPass(const RHICommandBufferHandle&, const RenderPassDescriptor&) = 0;
@@ -82,11 +110,27 @@ namespace OZZ::rendering {
                                  uint32_t indexCount,
                                  uint32_t instanceCount,
                                  uint32_t firstIndex,
-                                 int32_t  vertexOffset,
+                                 int32_t vertexOffset,
                                  uint32_t firstInstance) = 0;
 
         // Resource creation
         virtual RHITextureHandle CreateTexture() = 0;
+
+    protected:
+        // doing it this way will force the child classes to take in the platform context, which is necessary for
+        // initialization, but allows the base class to be agnostic of the platform context details
+        explicit RHIDevice(const PlatformContext&) {};
+
+        static FrameContext BuildFrameContext(RHICommandBufferHandle cmd,
+                                              RHITextureHandle backbuffer,
+                                              uint32_t imageIndex,
+                                              uint32_t frameIndex) {
+            return {cmd, backbuffer, imageIndex, frameIndex};
+        }
+
+        static uint32_t GetFrameNumberFromFrameContext(const FrameContext& context) { return context.frameIndex; }
+
+        static uint32_t GetImageIndexFromFrameContext(const FrameContext& context) { return context.imageIndex; }
     };
 
     std::unique_ptr<RHIDevice> CreateRHIDevice(const RHIInitParams&);

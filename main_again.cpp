@@ -85,6 +85,8 @@ int main() {
 
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
+        auto context = rhiDevice->BeginFrame();
+        rhiDevice->SubmitAndPresentFrame(std::move(context));
     }
 
     glfwTerminate();
