@@ -10,9 +10,16 @@
 namespace OZZ::rendering {
 
     struct TextureBarrierDescriptor {
-        RHITextureHandle Texture   {};
-        TextureLayout    OldLayout {TextureLayout::Undefined};
-        TextureLayout    NewLayout {TextureLayout::Undefined};
+        RHITextureHandle Texture {};
+        TextureLayout OldLayout {TextureLayout::Undefined};
+        TextureLayout NewLayout {TextureLayout::Undefined};
+        PipelineStage SrcStage {PipelineStage::None};
+        PipelineStage DstStage {PipelineStage::None};
+        Access SrcAccess {Access::None};
+        Access DstAccess {Access::None};
+        TextureSubresourceRange SubresourceRange {};
+        uint32_t SrcQueueFamily {QueueFamilyIgnored};
+        uint32_t DstQueueFamily {QueueFamilyIgnored};
     };
 
 } // namespace OZZ::rendering

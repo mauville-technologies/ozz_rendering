@@ -259,7 +259,7 @@ void GLFW_KeyCallback(GLFWwindow* window, int key, int scancode, int action, int
     }
 }
 
-int main() {
+int main2() {
     spdlog::set_level(spdlog::level::trace);
     if (!glfwInit()) {
         return 1;

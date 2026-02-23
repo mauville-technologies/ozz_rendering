@@ -90,7 +90,7 @@ namespace OZZ::rendering {
         virtual void EndRenderPass(const RHICommandBufferHandle&) = 0;
 
         // Resource barriers
-        virtual void ResourceBarrier(const RHICommandBufferHandle&, const TextureBarrierDescriptor&) = 0;
+        virtual void TextureResourceBarrier(const RHICommandBufferHandle&, const TextureBarrierDescriptor&) = 0;
 
         // Viewport / scissor
         virtual void SetViewport(const RHICommandBufferHandle&, const Viewport&) = 0;

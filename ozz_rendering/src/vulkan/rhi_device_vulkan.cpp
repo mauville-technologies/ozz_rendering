@@ -5,6 +5,7 @@
 #include "rhi_device_vulkan.h"
 
 #include "utils/initialization.h"
+#include "utils/rhi_vulkan_types.h"
 
 #include <algorithm>
 #include <ranges>
@@ -189,12 +190,16 @@ namespace OZZ::rendering::vk {
             return FrameContext::Null();
         }
 
-        ResourceBarrier(submissionContext.CommandBuffer,
-                        TextureBarrierDescriptor {
-                            .Texture = swapchainTextureHandles[imageIndex],
-                            .OldLayout = TextureLayout::Undefined,
-                            .NewLayout = TextureLayout::ColorAttachment,
-                        });
+        TextureResourceBarrier(submissionContext.CommandBuffer,
+                               TextureBarrierDescriptor {
+                                   .Texture = swapchainTextureHandles[imageIndex],
+                                   .OldLayout = TextureLayout::Undefined,
+                                   .NewLayout = TextureLayout::ColorAttachment,
+                                   .SrcStage = PipelineStage::ColorAttachmentOutput,
+                                   .DstStage = PipelineStage::ColorAttachmentOutput,
+                                   .SrcAccess = Access::None,
+                                   .DstAccess = Access::ColorAttachmentWrite,
+                               });
 
         return BuildFrameContext(submissionContext.CommandBuffer,
                                  swapchainTextureHandles[imageIndex],
@@ -205,12 +210,17 @@ namespace OZZ::rendering::vk {
     void RHIDeviceVulkan::SubmitAndPresentFrame(FrameContext context) {
         // Prepare swapchain image for presentation
         const auto imageIndex = GetImageIndexFromFrameContext(context);
-        ResourceBarrier(context.GetCommandBuffer(),
-                        TextureBarrierDescriptor {
-                            .Texture = swapchainTextureHandles[imageIndex],
-                            .OldLayout = TextureLayout::ColorAttachment,
-                            .NewLayout = TextureLayout::Present,
-                        });
+
+        TextureResourceBarrier(context.GetCommandBuffer(),
+                               TextureBarrierDescriptor {
+                                   .Texture = swapchainTextureHandles[imageIndex],
+                                   .OldLayout = TextureLayout::ColorAttachment,
+                                   .NewLayout = TextureLayout::Present,
+                                   .SrcStage = PipelineStage::ColorAttachmentOutput,
+                                   .DstStage = PipelineStage::None,
+                                   .SrcAccess = Access::ColorAttachmentWrite,
+                                   .DstAccess = Access::None,
+                               });
 
         auto commandBuffer = commandBufferResourcePool.Get(context.GetCommandBuffer());
         if (const auto result = vkEndCommandBuffer(*commandBuffer); result != VK_SUCCESS) {
@@ -263,7 +273,49 @@ namespace OZZ::rendering::vk {
 
     void RHIDeviceVulkan::EndRenderPass(const RHICommandBufferHandle&) {}
 
-    void RHIDeviceVulkan::ResourceBarrier(const RHICommandBufferHandle&, const TextureBarrierDescriptor&) {}
+    void RHIDeviceVulkan::TextureResourceBarrier(const RHICommandBufferHandle& cbHandle,
+                                                 const TextureBarrierDescriptor& barrierDescriptor) {
+        const auto commandBuffer = *commandBufferResourcePool.Get(cbHandle);
+
+        VkImageMemoryBarrier2 imageMemoryBarrier {
+            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+            .pNext = nullptr,
+            .srcStageMask = ConvertPipelineStageToVulkan(barrierDescriptor.SrcStage),
+            .srcAccessMask = ConvertAccessToVulkan(barrierDescriptor.SrcAccess),
+            .dstStageMask = ConvertPipelineStageToVulkan(barrierDescriptor.DstStage),
+            .dstAccessMask = ConvertAccessToVulkan(barrierDescriptor.DstAccess),
+            .oldLayout = ConvertTextureLayoutToVulkan(barrierDescriptor.OldLayout),
+            .newLayout = ConvertTextureLayoutToVulkan(barrierDescriptor.NewLayout),
+            .srcQueueFamilyIndex = barrierDescriptor.SrcQueueFamily == QueueFamilyIgnored
+                                       ? VK_QUEUE_FAMILY_IGNORED
+                                       : static_cast<uint32_t>(barrierDescriptor.SrcQueueFamily),
+            .dstQueueFamilyIndex = barrierDescriptor.DstQueueFamily == QueueFamilyIgnored
+                                       ? VK_QUEUE_FAMILY_IGNORED
+                                       : static_cast<uint32_t>(barrierDescriptor.DstQueueFamily),
+            .image = texturePool.Get(barrierDescriptor.Texture)->Image,
+            .subresourceRange =
+                {
+                    .aspectMask = ConvertTextureAspectToVulkan(barrierDescriptor.SubresourceRange.Aspect),
+                    .baseMipLevel = barrierDescriptor.SubresourceRange.BaseMipLevel,
+                    .levelCount = barrierDescriptor.SubresourceRange.LevelCount,
+                    .baseArrayLayer = barrierDescriptor.SubresourceRange.BaseArrayLayer,
+                    .layerCount = barrierDescriptor.SubresourceRange.LayerCount,
+                },
+        };
+        VkDependencyInfo barrierDependency {
+            .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+            .pNext = nullptr,
+            .dependencyFlags = 0,
+            .memoryBarrierCount = 0,
+            .pMemoryBarriers = nullptr,
+            .bufferMemoryBarrierCount = 0,
+            .pBufferMemoryBarriers = nullptr,
+            .imageMemoryBarrierCount = 1,
+            .pImageMemoryBarriers = &imageMemoryBarrier, // to be filled out based on the TextureBarrierDescriptor
+        };
+
+        vkCmdPipelineBarrier2(commandBuffer, &barrierDependency);
+    }
 
     void RHIDeviceVulkan::SetViewport(const RHICommandBufferHandle&, const Viewport&) {}
 

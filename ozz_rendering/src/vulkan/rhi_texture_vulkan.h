@@ -12,5 +12,4 @@ namespace OZZ::rendering::vk {
         VkImageView ImageView {VK_NULL_HANDLE};
         VmaAllocation Allocation {VK_NULL_HANDLE};
     };
-
 } // namespace OZZ::rendering::vk

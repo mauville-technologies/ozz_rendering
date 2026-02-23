@@ -33,7 +33,7 @@ namespace OZZ::rendering::vk {
         void BeginRenderPass(const RHICommandBufferHandle&, const RenderPassDescriptor&) override;
         void EndRenderPass(const RHICommandBufferHandle&) override;
 
-        void ResourceBarrier(const RHICommandBufferHandle&, const TextureBarrierDescriptor&) override;
+        void TextureResourceBarrier(const RHICommandBufferHandle&, const TextureBarrierDescriptor&) override;
 
         void SetViewport(const RHICommandBufferHandle&, const Viewport&) override;
         void SetScissor(const RHICommandBufferHandle&, const Scissor&) override;

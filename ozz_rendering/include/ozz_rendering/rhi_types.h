@@ -63,6 +63,39 @@ namespace OZZ::rendering {
         Count16 = 16,
     };
 
+    enum class PipelineStage {
+        None,
+        ColorAttachmentOutput,
+        Transfer,
+        AllGraphics,
+        AllCommands,
+    };
+
+    enum class Access {
+        None,
+        ColorAttachmentRead,
+        ColorAttachmentWrite,
+        ShaderRead,
+        TransferRead,
+        TransferWrite,
+    };
+
+    enum class TextureAspect {
+        Color,
+        Depth,
+        Stencil,
+    };
+
+    struct TextureSubresourceRange {
+        TextureAspect Aspect         {TextureAspect::Color};
+        uint32_t      BaseMipLevel   {0};
+        uint32_t      LevelCount     {1};
+        uint32_t      BaseArrayLayer {0};
+        uint32_t      LayerCount     {1};
+    };
+
+    inline constexpr uint32_t QueueFamilyIgnored = ~0u;
+
     enum class ColorComponent : uint8_t {
         R   = 1 << 0,
         G   = 1 << 1,
