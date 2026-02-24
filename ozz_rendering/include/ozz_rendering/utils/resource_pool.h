@@ -26,6 +26,8 @@ namespace OZZ::rendering {
         explicit ResourcePool(DestroyFunction destroyFunc)
             : destroyFunction(std::move(destroyFunc)) {}
 
+        ~ResourcePool() { Empty(); }
+
         std::vector<ResourcePoolSlot<ResourceType>> Slots;
         std::vector<uint32_t> FreeIndices;
 
@@ -58,7 +60,7 @@ namespace OZZ::rendering {
         }
 
         void Free(const RHIHandle<Tag>& handle) {
-            if (handle.Id < Slots.size() && Slots[handle.Id].Generation == handle.Generation) {
+            if (IsValidHandle(handle)) {
                 if (auto& slot = Slots[handle.Id]; slot.Occupied()) {
                     destroyFunction(Slots[handle.Id].Resource.value());
                     Slots[handle.Id].Resource.reset();
@@ -67,6 +69,17 @@ namespace OZZ::rendering {
                     ++slot.Generation;
                 }
             }
+        }
+
+        void Empty() {
+            for (auto& slot : Slots) {
+                if (slot.Occupied()) {
+                    destroyFunction(slot.Resource.value());
+                    slot.Resource.reset();
+                }
+            }
+            Slots.clear();
+            FreeIndices.clear();
         }
 
     private:

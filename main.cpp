@@ -7,9 +7,9 @@
 #include <filesystem>
 
 #include "ozz_rendering/include/ozz_rendering/scratch/core.h"
-#include "ozz_rendering/include/ozz_rendering/scratch/vulkan_shader.h"
 #include "ozz_rendering/scratch/util.h"
 #include "ozz_rendering/scratch/vulkan_queue.h"
+#include "ozz_rendering/src/vulkan/rhi_vulkan_shader.h"
 
 #define WINDOW_WIDTH 800
 #define WINDOW_HEIGHT 600
@@ -34,11 +34,11 @@ public:
 
         numSwapchainImages = vkCore.GetSwapchainImageCount();
         std::filesystem::path base = std::filesystem::current_path() / "assets" / "shaders" / "basic";
-        vulkanShader = std::make_unique<OZZ::vk::VulkanShader>(vkCore.GetDevice(),
-                                                               OZZ::vk::ShaderFileParams {
-                                                                   .Vertex = base / "basic.vert",
-                                                                   .Fragment = base / "basic.frag",
-                                                               });
+        vulkanShader = std::make_unique<OZZ::rendering::vk::RHIVulkanShader>(vkCore.GetDevice(),
+                                                                             OZZ::rendering::ShaderFileParams {
+                                                                                 .Vertex = base / "basic.vert",
+                                                                                 .Fragment = base / "basic.frag",
+                                                                             });
 
         createCommandBuffers();
         recordCommandBuffers();
@@ -57,7 +57,7 @@ public:
     }
 
     void Render() {
-        uint32_t imageIndex = queue->AcquireNextImage();
+        const uint32_t imageIndex = queue->AcquireNextImage();
         queue->SubmitAsync(commandBuffers[imageIndex]);
         queue->Present(imageIndex);
         // queue->WaitIdle();
@@ -247,7 +247,7 @@ private:
     OZZ::vk::VulkanQueue* queue {nullptr};
     uint32_t numSwapchainImages = 0;
 
-    std::unique_ptr<OZZ::vk::VulkanShader> vulkanShader;
+    std::unique_ptr<OZZ::rendering::vk::RHIVulkanShader> vulkanShader;
     std::vector<VkCommandBuffer> commandBuffers {};
 
     std::vector<VkFramebuffer> framebuffers;

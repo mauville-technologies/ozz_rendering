@@ -4,29 +4,19 @@
 
 #pragma once
 
+#include "ozz_rendering/rhi_shader.h"
+
 #include <filesystem>
 #include <glslang/Public/ShaderLang.h>
 #include <memory>
 
 #include <volk.h>
 
-namespace OZZ::vk {
+namespace OZZ::rendering::vk {
     struct CompiledShaderProgram {
         std::vector<uint32_t> VertexSpirv;
         std::vector<uint32_t> GeometrySpirv;
         std::vector<uint32_t> FragmentSpirv;
-    };
-
-    struct ShaderSourceParams {
-        std::string Vertex;
-        std::string Geometry;
-        std::string Fragment;
-    };
-
-    struct ShaderFileParams {
-        std::filesystem::path Vertex;
-        std::filesystem::path Geometry;
-        std::filesystem::path Fragment;
     };
 
     enum class ShaderStage {
@@ -47,13 +37,15 @@ namespace OZZ::vk {
         return EShLangCount;
     }
 
-    class VulkanShader {
+    class RHIVulkanShader {
     public:
-        VulkanShader(VkDevice device, ShaderFileParams&& shaderFiles);
-        VulkanShader(VkDevice device, ShaderSourceParams&& shaderSources);
+        RHIVulkanShader(VkDevice device, ShaderFileParams&& shaderFiles);
+        RHIVulkanShader(VkDevice device, ShaderSourceParams&& shaderSources);
 
         void Bind(VkDevice device, VkCommandBuffer commandBuffer) const;
         void Destroy(VkDevice vk_device);
+
+        [[nodiscard]] bool IsValid() const { return bIsValid; }
 
     private:
         bool compileSources(VkDevice device, ShaderSourceParams&& shaderSources);
@@ -64,6 +56,8 @@ namespace OZZ::vk {
     private:
         std::vector<VkShaderEXT> shaders {};
         std::vector<VkShaderStageFlagBits> shaderStages {};
+
+        bool bIsValid {false};
     };
 
-} // namespace OZZ::vk
+} // namespace OZZ::rendering::vk

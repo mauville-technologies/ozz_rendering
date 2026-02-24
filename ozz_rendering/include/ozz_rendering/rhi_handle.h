@@ -27,6 +27,6 @@ namespace OZZ::rendering {
 
     using RHITextureHandle = RHIHandle<struct TextureTag>;
     using RHICommandBufferHandle = RHIHandle<struct CommandBufferTag>;
-    using RHIShaderHandler = RHIHandle<struct ShaderTag>;
+    using RHIShaderHandle = RHIHandle<struct ShaderTag>;
 
 } // namespace OZZ::rendering

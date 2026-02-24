@@ -2,9 +2,8 @@
 // Created by paulm on 2026-02-17.
 //
 
-#include "../../../include/ozz_rendering/scratch/vulkan_shader.h"
+#include "rhi_vulkan_shader.h"
 
-#include "../../../include/ozz_rendering/scratch/util.h"
 #include "spdlog/spdlog.h"
 
 #include <fstream>
@@ -12,8 +11,8 @@
 #include <glslang/Public/ShaderLang.h>
 #include <glslang/SPIRV/GlslangToSpv.h>
 
-namespace OZZ::vk {
-    VulkanShader::VulkanShader(VkDevice device, ShaderFileParams&& shaderFiles) {
+namespace OZZ::rendering::vk {
+    RHIVulkanShader::RHIVulkanShader(VkDevice device, ShaderFileParams&& shaderFiles) {
         // load files
         std::ifstream vertexFile(shaderFiles.Vertex);
         std::ifstream fragmentFile(shaderFiles.Fragment);
@@ -35,23 +34,23 @@ namespace OZZ::vk {
             geometrySource = std::string((std::istreambuf_iterator(geometryShader)), std::istreambuf_iterator<char>());
         }
 
-        compileSources(device,
-                       {
-                           .Vertex = vertexSource,
-                           .Geometry = geometrySource,
-                           .Fragment = fragmentSource,
-                       });
+        bIsValid = compileSources(device,
+                                  {
+                                      .Vertex = vertexSource,
+                                      .Geometry = geometrySource,
+                                      .Fragment = fragmentSource,
+                                  });
     }
 
-    VulkanShader::VulkanShader(VkDevice device, ShaderSourceParams&& shaderSources) {
-        compileSources(device, std::move(shaderSources));
+    RHIVulkanShader::RHIVulkanShader(VkDevice device, ShaderSourceParams&& shaderSources) {
+        bIsValid = compileSources(device, std::move(shaderSources));
     }
 
-    void VulkanShader::Bind(VkDevice device, VkCommandBuffer commandBuffer) const {
+    void RHIVulkanShader::Bind(VkDevice device, VkCommandBuffer commandBuffer) const {
         vkCmdBindShadersEXT(commandBuffer, shaderStages.size(), shaderStages.data(), shaders.data());
     }
 
-    void VulkanShader::Destroy(VkDevice vk_device) {
+    void RHIVulkanShader::Destroy(VkDevice vk_device) {
         for (auto shader : shaders) {
             if (shader != VK_NULL_HANDLE) {
                 vkDestroyShaderEXT(vk_device, shader, nullptr);
@@ -61,7 +60,7 @@ namespace OZZ::vk {
         shaderStages.clear();
     }
 
-    bool VulkanShader::compileSources(VkDevice device, ShaderSourceParams&& shaderSources) {
+    bool RHIVulkanShader::compileSources(VkDevice device, ShaderSourceParams&& shaderSources) {
         shaderStages.clear();
         shaders.clear();
 
@@ -141,10 +140,14 @@ namespace OZZ::vk {
         shaderStages.emplace_back(VK_SHADER_STAGE_FRAGMENT_BIT);
 
         shaders.resize(createInfos.size());
+        if (const auto result =
+                vkCreateShadersEXT(device, createInfos.size(), createInfos.data(), nullptr, shaders.data());
+            result != VK_SUCCESS) {
 
-        const auto result = vkCreateShadersEXT(device, createInfos.size(), createInfos.data(), nullptr, shaders.data());
-        CHECK_VK_RESULT(result, "Creating shader object");
-        spdlog::info("Successfully created shader object");
+            spdlog::error("Failed to create shader objects, error code: {}", static_cast<int>(result));
+            return false;
+        }
+        spdlog::trace("Successfully created shader object");
 
         if (!bHasGeo) {
             shaders.emplace_back(VK_NULL_HANDLE);
@@ -155,7 +158,7 @@ namespace OZZ::vk {
         return true;
     }
 
-    std::optional<CompiledShaderProgram> VulkanShader::compileProgram(const ShaderSourceParams& shaderSources) {
+    std::optional<CompiledShaderProgram> RHIVulkanShader::compileProgram(const ShaderSourceParams& shaderSources) {
         glslang::InitializeProcess();
 
         // vertex and fragment are mandatory
@@ -196,7 +199,7 @@ namespace OZZ::vk {
             return std::nullopt;
         }
 
-        spdlog::info("Successfully linked and compiled shader");
+        spdlog::trace("Successfully linked and compiled shader");
         CompiledShaderProgram compiled {};
         glslang::GlslangToSpv(*shaderProgram->getIntermediate(ToGLSLANGShaderStage(ShaderStage::Vertex)),
                               compiled.VertexSpirv);
@@ -210,8 +213,8 @@ namespace OZZ::vk {
         return compiled;
     }
 
-    std::pair<bool, std::unique_ptr<glslang::TShader>> VulkanShader::compileShader(const ShaderStage stage,
-                                                                                   const std::string& glslCode) {
+    std::pair<bool, std::unique_ptr<glslang::TShader>> RHIVulkanShader::compileShader(const ShaderStage stage,
+                                                                                      const std::string& glslCode) {
         auto shader = std::make_unique<glslang::TShader>(ToGLSLANGShaderStage(stage));
         const char* code = glslCode.c_str();
         shader->setStrings(&code, 1);
@@ -243,4 +246,4 @@ namespace OZZ::vk {
 
         return {true, std::move(shader)};
     }
-} // namespace OZZ::vk
+} // namespace OZZ::rendering::vk

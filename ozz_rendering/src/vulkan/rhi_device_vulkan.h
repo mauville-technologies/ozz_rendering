@@ -3,12 +3,16 @@
 //
 
 #pragma once
-#include "../resource_pool.h"
+
+#include <volk.h>
+
+#include "ozz_rendering/utils/resource_pool.h"
+
 #include "rhi_texture_vulkan.h"
+#include "rhi_vulkan_shader.h"
 #include "utils/physical_devices.h"
 
 #include <ozz_rendering/rhi.h>
-#include <volk.h>
 
 namespace OZZ::rendering::vk {
     constexpr uint32_t MaxFramesInFlight = 2;
@@ -55,6 +59,11 @@ namespace OZZ::rendering::vk {
 
         // Resource creation
         RHITextureHandle CreateTexture() override;
+
+        RHIShaderHandle CreateShader(ShaderFileParams&& shaderFiles) override;
+        RHIShaderHandle CreateShader(ShaderSourceParams&& shaderSources) override;
+        void FreeShader(const RHIShaderHandle&) override;
+        void BindShader(const RHICommandBufferHandle&, const RHIShaderHandle&) override;
 
     private:
         bool initialize();
@@ -109,5 +118,6 @@ namespace OZZ::rendering::vk {
         // resource pools
         ResourcePool<TextureTag, RHITextureVulkan> texturePool;
         ResourcePool<CommandBufferTag, VkCommandBuffer> commandBufferResourcePool;
+        ResourcePool<ShaderTag, RHIVulkanShader> shaderResourcePool;
     };
 } // namespace OZZ::rendering::vk

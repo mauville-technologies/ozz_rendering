@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "rhi_shader.h"
+
 #include <functional>
 #include <memory>
 #include <string>
@@ -115,6 +117,11 @@ namespace OZZ::rendering {
 
         // Resource creation
         virtual RHITextureHandle CreateTexture() = 0;
+
+        virtual RHIShaderHandle CreateShader(ShaderFileParams&&) = 0;
+        virtual RHIShaderHandle CreateShader(ShaderSourceParams&&) = 0;
+        virtual void FreeShader(const RHIShaderHandle&) = 0;
+        virtual void BindShader(const RHICommandBufferHandle&, const RHIShaderHandle&) = 0;
 
     protected:
         // doing it this way will force the child classes to take in the platform context, which is necessary for

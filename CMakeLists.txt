@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(vulkan_playground)
+project(ozz_rendering_app)
 
 set(CMAKE_CXX_STANDARD 23)
 
@@ -21,7 +21,7 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(glmlib)
 
 
-add_executable(vulkan_playground main_again.cpp main.cpp)
+add_executable(${PROJECT_NAME} main_again.cpp main.cpp)
 
 add_subdirectory(ozz_rendering)
 

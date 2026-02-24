@@ -14,12 +14,12 @@ set(SOURCES
         src/vulkan/scratch/core.cpp
         src/vulkan/utils/physical_devices.cpp
         src/vulkan/scratch/vulkan_queue.cpp
-        src/vulkan/scratch/vulkan_shader.cpp
 
         src/rhi.cpp
         src/vulkan/vma.cpp
         src/vulkan/rhi_device_vulkan.cpp
         src/vulkan/rhi_texture_vulkan.cpp
+        src/vulkan/rhi_vulkan_shader.cpp
 )
 add_library(${PROJECT_NAME} STATIC ${SOURCES})
 
@@ -31,4 +31,6 @@ target_link_libraries(${PROJECT_NAME}
 target_include_directories(${PROJECT_NAME}
         PUBLIC
         include/
+        PRIVATE
+        src/
 )

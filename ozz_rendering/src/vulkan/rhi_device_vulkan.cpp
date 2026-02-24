@@ -55,10 +55,11 @@ namespace OZZ::rendering::vk {
             if (commandBufferPool) {
                 vkFreeCommandBuffers(device, commandBufferPool, 1, &commandBuffer);
             }
+        })
+        , shaderResourcePool([this](RHIVulkanShader& shader) {
+            shader.Destroy(device);
         }) {
-        texturePool = ResourcePool<struct TextureTag, RHITextureVulkan>([](RHITextureVulkan& texture) {
 
-        });
         auto result = volkInitialize();
         if (result != VK_SUCCESS) {
             spdlog::error("Failed to initialize volk");
@@ -74,6 +75,11 @@ namespace OZZ::rendering::vk {
             graphicsQueue = VK_NULL_HANDLE;
         }
 
+        // clear resource pools
+        shaderResourcePool.Empty();
+        texturePool.Empty();
+        commandBufferResourcePool.Empty();
+
         for (auto& context : submissionContexts) {
             if (context.InFlightFence != VK_NULL_HANDLE) {
                 vkDestroyFence(device, context.InFlightFence, nullptr);
@@ -83,12 +89,8 @@ namespace OZZ::rendering::vk {
                 vkDestroySemaphore(device, context.AcquireImageSemaphore, nullptr);
                 context.AcquireImageSemaphore = VK_NULL_HANDLE;
             }
-
-            if (context.CommandBuffer.IsValid()) {
-                commandBufferResourcePool.Free(context.CommandBuffer);
-                context.CommandBuffer = RHICommandBufferHandle::Null();
-            }
         }
+
         submissionContexts.clear();
         spdlog::trace("cleared submission contexts");
 
@@ -408,11 +410,14 @@ namespace OZZ::rendering::vk {
 
     void RHIDeviceVulkan::SetGraphicsState(const RHICommandBufferHandle&, const GraphicsStateDescriptor&) {}
 
-    void RHIDeviceVulkan::Draw(const RHICommandBufferHandle&,
-                               uint32_t vertexCount,
-                               uint32_t instanceCount,
-                               uint32_t firstVertex,
-                               uint32_t firstInstance) {}
+    void RHIDeviceVulkan::Draw(const RHICommandBufferHandle& commandBufferHandle,
+                               const uint32_t vertexCount,
+                               const uint32_t instanceCount,
+                               const uint32_t firstVertex,
+                               const uint32_t firstInstance) {
+        const auto* commandBuffer = commandBufferResourcePool.Get(commandBufferHandle);
+        vkCmdDraw(*commandBuffer, vertexCount, instanceCount, firstVertex, firstInstance);
+    }
 
     void RHIDeviceVulkan::DrawIndexed(const RHICommandBufferHandle&,
                                       uint32_t indexCount,
@@ -423,6 +428,38 @@ namespace OZZ::rendering::vk {
 
     RHITextureHandle RHIDeviceVulkan::CreateTexture() {
         return RHITextureHandle::Null();
+    }
+
+    RHIShaderHandle RHIDeviceVulkan::CreateShader(ShaderFileParams&& shaderFiles) {
+        RHIVulkanShader shader {device, std::move(shaderFiles)};
+        if (!shader.IsValid()) {
+            spdlog::error("Failed to create shader from files. Aborting process. See logs for details.");
+            return RHIShaderHandle::Null();
+        }
+
+        return shaderResourcePool.Allocate(std::move(shader));
+    }
+
+    RHIShaderHandle RHIDeviceVulkan::CreateShader(ShaderSourceParams&& shaderSources) {
+        RHIVulkanShader shader {device, std::move(shaderSources)};
+        if (!shader.IsValid()) {
+            spdlog::error("Failed to create shader from files. Aborting process. See logs for details.");
+            return RHIShaderHandle::Null();
+        }
+
+        return shaderResourcePool.Allocate(std::move(shader));
+    }
+
+    void RHIDeviceVulkan::FreeShader(const RHIShaderHandle& shaderHandle) {
+        shaderResourcePool.Free(shaderHandle);
+    }
+
+    void RHIDeviceVulkan::BindShader(const RHICommandBufferHandle& commandBufferHandle,
+                                     const RHIShaderHandle& shaderHandle) {
+        if (const auto* shader = shaderResourcePool.Get(shaderHandle)) {
+            const auto commandBuffer = *commandBufferResourcePool.Get(commandBufferHandle);
+            shader->Bind(device, commandBuffer);
+        }
     }
 
     bool RHIDeviceVulkan::initialize() {

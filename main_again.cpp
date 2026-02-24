@@ -13,6 +13,8 @@
 
 #include <cstdlib>
 
+OZZ::rendering::RHIShaderHandle shader {};
+
 OZZ::rendering::RenderPassDescriptor renderPassDescriptor {
     .ColorAttachments =
         {
@@ -112,21 +114,28 @@ int main() {
         },
     });
 
+    std::filesystem::path base = std::filesystem::current_path() / "assets" / "shaders" / "basic";
+    shader = rhiDevice->CreateShader(OZZ::rendering::ShaderFileParams {
+        .Vertex = base / "basic.vert",
+        .Fragment = base / "basic.frag",
+    });
+
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
         auto context = rhiDevice->BeginFrame();
         renderPassDescriptor.ColorAttachments[0].Texture = context.GetBackbuffer();
         rhiDevice->BeginRenderPass(context.GetCommandBuffer(), renderPassDescriptor);
         rhiDevice->SetGraphicsState(context.GetCommandBuffer(), {});
+        rhiDevice->BindShader(context.GetCommandBuffer(), shader);
 
         // Bind material
-
         rhiDevice->Draw(context.GetCommandBuffer(), 3, 1, 0, 0);
 
         rhiDevice->EndRenderPass(context.GetCommandBuffer());
         rhiDevice->SubmitAndPresentFrame(std::move(context));
     }
 
+    rhiDevice.reset();
     glfwTerminate();
     return 0;
 }
