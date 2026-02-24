@@ -21,7 +21,7 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(glmlib)
 
 
-add_executable(${PROJECT_NAME} main_again.cpp main.cpp)
+add_executable(${PROJECT_NAME} main.cpp)
 
 add_subdirectory(ozz_rendering)
 

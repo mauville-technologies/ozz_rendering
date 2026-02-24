@@ -10,10 +10,7 @@ add_subdirectory(third_party)
 set(SOURCES
         src/glslang/resources.cpp
 
-        src/vulkan/scratch/util.cpp
-        src/vulkan/scratch/core.cpp
         src/vulkan/utils/physical_devices.cpp
-        src/vulkan/scratch/vulkan_queue.cpp
 
         src/rhi.cpp
         src/vulkan/vma.cpp

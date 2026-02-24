@@ -404,11 +404,109 @@ namespace OZZ::rendering::vk {
         vkCmdPipelineBarrier2(commandBuffer, &barrierDependency);
     }
 
-    void RHIDeviceVulkan::SetViewport(const RHICommandBufferHandle&, const Viewport&) {}
+    void RHIDeviceVulkan::SetViewport(const RHICommandBufferHandle& commandBufferHandle, const Viewport& viewport) {
+        const auto* commandBuffer = commandBufferResourcePool.Get(commandBufferHandle);
+        VkViewport vkViewport {
+            .x = viewport.X,
+            .y = viewport.Y,
+            .width = viewport.Width,
+            .height = viewport.Height,
+            .minDepth = viewport.MinDepth,
+            .maxDepth = viewport.MaxDepth,
+        };
+        vkCmdSetViewportWithCount(*commandBuffer, 1, &vkViewport);
+    }
 
-    void RHIDeviceVulkan::SetScissor(const RHICommandBufferHandle&, const Scissor&) {}
+    void RHIDeviceVulkan::SetScissor(const RHICommandBufferHandle& commandBufferHandle, const Scissor& scissor) {
+        const auto* commandBuffer = commandBufferResourcePool.Get(commandBufferHandle);
+        VkRect2D vkScissor {
+            .offset =
+                {
+                    .x = scissor.X,
+                    .y = scissor.Y,
+                },
+            .extent =
+                {
+                    .width = scissor.Width,
+                    .height = scissor.Height,
+                },
+        };
+        vkCmdSetScissorWithCount(*commandBuffer, 1, &vkScissor);
+    }
 
-    void RHIDeviceVulkan::SetGraphicsState(const RHICommandBufferHandle&, const GraphicsStateDescriptor&) {}
+    void RHIDeviceVulkan::SetGraphicsState(const RHICommandBufferHandle& commandBufferHandle,
+                                           const GraphicsStateDescriptor& graphicsStateDescriptor) {
+        const VkCommandBuffer cmd = *commandBufferResourcePool.Get(commandBufferHandle);
+
+        // Input Assembly
+        vkCmdSetPrimitiveTopology(cmd,
+                                  ConvertPrimitiveTopologyToVulkan(graphicsStateDescriptor.InputAssembly.Topology));
+        vkCmdSetPrimitiveRestartEnable(cmd, graphicsStateDescriptor.InputAssembly.PrimitiveRestartEnable);
+
+        // Rasterization
+        vkCmdSetCullMode(cmd, ConvertCullModeToVulkan(graphicsStateDescriptor.Rasterization.Cull));
+        vkCmdSetFrontFace(cmd, ConvertFrontFaceToVulkan(graphicsStateDescriptor.Rasterization.Front));
+        vkCmdSetPolygonModeEXT(cmd, ConvertPolygonModeToVulkan(graphicsStateDescriptor.Rasterization.Polygon));
+        vkCmdSetDepthBiasEnable(cmd, graphicsStateDescriptor.Rasterization.DepthBiasEnable);
+        vkCmdSetRasterizerDiscardEnable(cmd, graphicsStateDescriptor.Rasterization.RasterizerDiscard);
+
+        // Depth / Stencil
+        vkCmdSetDepthTestEnable(cmd, graphicsStateDescriptor.DepthStencil.DepthTestEnable);
+        vkCmdSetDepthWriteEnable(cmd, graphicsStateDescriptor.DepthStencil.DepthWriteEnable);
+        vkCmdSetStencilTestEnable(cmd, graphicsStateDescriptor.DepthStencil.StencilTestEnable);
+
+        // Multisample
+        const VkSampleCountFlagBits sampleCount =
+            ConvertSampleCountToVulkan(graphicsStateDescriptor.Multisample.Samples);
+        const VkSampleMask sampleMask = graphicsStateDescriptor.Multisample.SampleMask;
+        vkCmdSetRasterizationSamplesEXT(cmd, sampleCount);
+        vkCmdSetSampleMaskEXT(cmd, sampleCount, &sampleMask);
+        vkCmdSetAlphaToCoverageEnableEXT(cmd, graphicsStateDescriptor.Multisample.AlphaToCoverageEnable);
+
+        // Color Blend
+        if (graphicsStateDescriptor.ColorBlendAttachmentCount > 0) {
+            VkBool32 blendEnables[MaxBlendAttachments];
+            VkColorComponentFlags colorWriteMasks[MaxBlendAttachments];
+            for (uint32_t i = 0; i < graphicsStateDescriptor.ColorBlendAttachmentCount; ++i) {
+                blendEnables[i] = graphicsStateDescriptor.ColorBlend[i].BlendEnable;
+                colorWriteMasks[i] =
+                    ConvertColorComponentFlagsToVulkan(graphicsStateDescriptor.ColorBlend[i].ColorWriteMask);
+            }
+            vkCmdSetColorBlendEnableEXT(cmd, 0, graphicsStateDescriptor.ColorBlendAttachmentCount, blendEnables);
+            vkCmdSetColorWriteMaskEXT(cmd, 0, graphicsStateDescriptor.ColorBlendAttachmentCount, colorWriteMasks);
+        }
+
+        // Vertex Input
+        VkVertexInputBindingDescription2EXT bindings[MaxVertexBindings];
+        for (uint32_t i = 0; i < graphicsStateDescriptor.VertexInput.BindingCount; ++i) {
+            const auto& src = graphicsStateDescriptor.VertexInput.Bindings[i];
+            bindings[i] = {
+                .sType = VK_STRUCTURE_TYPE_VERTEX_INPUT_BINDING_DESCRIPTION_2_EXT,
+                .pNext = nullptr,
+                .binding = src.Binding,
+                .stride = src.Stride,
+                .inputRate = ConvertVertexInputRateToVulkan(src.InputRate),
+                .divisor = 1,
+            };
+        }
+        VkVertexInputAttributeDescription2EXT attributes[MaxVertexAttributes];
+        for (uint32_t i = 0; i < graphicsStateDescriptor.VertexInput.AttributeCount; ++i) {
+            const auto& src = graphicsStateDescriptor.VertexInput.Attributes[i];
+            attributes[i] = {
+                .sType = VK_STRUCTURE_TYPE_VERTEX_INPUT_ATTRIBUTE_DESCRIPTION_2_EXT,
+                .pNext = nullptr,
+                .location = src.Location,
+                .binding = src.Binding,
+                .format = ConvertVertexFormatToVulkan(src.Format),
+                .offset = src.Offset,
+            };
+        }
+        vkCmdSetVertexInputEXT(cmd,
+                               graphicsStateDescriptor.VertexInput.BindingCount,
+                               bindings,
+                               graphicsStateDescriptor.VertexInput.AttributeCount,
+                               attributes);
+    }
 
     void RHIDeviceVulkan::Draw(const RHICommandBufferHandle& commandBufferHandle,
                                const uint32_t vertexCount,

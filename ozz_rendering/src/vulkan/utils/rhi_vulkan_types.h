@@ -95,4 +95,125 @@ namespace OZZ::rendering::vk {
         }
         return VK_ATTACHMENT_STORE_OP_DONT_CARE;
     }
+
+    inline VkPrimitiveTopology ConvertPrimitiveTopologyToVulkan(const PrimitiveTopology topology) {
+        switch (topology) {
+            case PrimitiveTopology::TriangleList:
+                return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+            case PrimitiveTopology::TriangleStrip:
+                return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
+            case PrimitiveTopology::LineList:
+                return VK_PRIMITIVE_TOPOLOGY_LINE_LIST;
+            case PrimitiveTopology::LineStrip:
+                return VK_PRIMITIVE_TOPOLOGY_LINE_STRIP;
+            case PrimitiveTopology::PointList:
+                return VK_PRIMITIVE_TOPOLOGY_POINT_LIST;
+        }
+        return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    }
+
+    inline VkCullModeFlags ConvertCullModeToVulkan(const CullMode cullMode) {
+        switch (cullMode) {
+            case CullMode::None:
+                return VK_CULL_MODE_NONE;
+            case CullMode::Front:
+                return VK_CULL_MODE_FRONT_BIT;
+            case CullMode::Back:
+                return VK_CULL_MODE_BACK_BIT;
+            case CullMode::FrontAndBack:
+                return VK_CULL_MODE_FRONT_AND_BACK;
+        }
+        return VK_CULL_MODE_NONE;
+    }
+
+    inline VkFrontFace ConvertFrontFaceToVulkan(const FrontFace frontFace) {
+        switch (frontFace) {
+            case FrontFace::CounterClockwise:
+                return VK_FRONT_FACE_COUNTER_CLOCKWISE;
+            case FrontFace::Clockwise:
+                return VK_FRONT_FACE_CLOCKWISE;
+        }
+        return VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    }
+
+    inline VkPolygonMode ConvertPolygonModeToVulkan(const PolygonMode polygonMode) {
+        switch (polygonMode) {
+            case PolygonMode::Fill:
+                return VK_POLYGON_MODE_FILL;
+            case PolygonMode::Line:
+                return VK_POLYGON_MODE_LINE;
+            case PolygonMode::Point:
+                return VK_POLYGON_MODE_POINT;
+        }
+        return VK_POLYGON_MODE_FILL;
+    }
+
+    inline VkSampleCountFlagBits ConvertSampleCountToVulkan(const SampleCount sampleCount) {
+        switch (sampleCount) {
+            case SampleCount::Count1:
+                return VK_SAMPLE_COUNT_1_BIT;
+            case SampleCount::Count2:
+                return VK_SAMPLE_COUNT_2_BIT;
+            case SampleCount::Count4:
+                return VK_SAMPLE_COUNT_4_BIT;
+            case SampleCount::Count8:
+                return VK_SAMPLE_COUNT_8_BIT;
+            case SampleCount::Count16:
+                return VK_SAMPLE_COUNT_16_BIT;
+        }
+        return VK_SAMPLE_COUNT_1_BIT;
+    }
+
+    inline VkColorComponentFlags ConvertColorComponentFlagsToVulkan(const ColorComponentFlags flags) {
+        VkColorComponentFlags result = 0;
+        if (flags & static_cast<ColorComponentFlags>(ColorComponent::R))
+            result |= VK_COLOR_COMPONENT_R_BIT;
+        if (flags & static_cast<ColorComponentFlags>(ColorComponent::G))
+            result |= VK_COLOR_COMPONENT_G_BIT;
+        if (flags & static_cast<ColorComponentFlags>(ColorComponent::B))
+            result |= VK_COLOR_COMPONENT_B_BIT;
+        if (flags & static_cast<ColorComponentFlags>(ColorComponent::A))
+            result |= VK_COLOR_COMPONENT_A_BIT;
+        return result;
+    }
+
+    inline VkVertexInputRate ConvertVertexInputRateToVulkan(const VertexInputRate inputRate) {
+        switch (inputRate) {
+            case VertexInputRate::Vertex:
+                return VK_VERTEX_INPUT_RATE_VERTEX;
+            case VertexInputRate::Instance:
+                return VK_VERTEX_INPUT_RATE_INSTANCE;
+        }
+        return VK_VERTEX_INPUT_RATE_VERTEX;
+    }
+
+    inline VkFormat ConvertVertexFormatToVulkan(const VertexFormat format) {
+        switch (format) {
+            case VertexFormat::Float1:
+                return VK_FORMAT_R32_SFLOAT;
+            case VertexFormat::Float2:
+                return VK_FORMAT_R32G32_SFLOAT;
+            case VertexFormat::Float3:
+                return VK_FORMAT_R32G32B32_SFLOAT;
+            case VertexFormat::Float4:
+                return VK_FORMAT_R32G32B32A32_SFLOAT;
+            case VertexFormat::Int1:
+                return VK_FORMAT_R32_SINT;
+            case VertexFormat::Int2:
+                return VK_FORMAT_R32G32_SINT;
+            case VertexFormat::Int3:
+                return VK_FORMAT_R32G32B32_SINT;
+            case VertexFormat::Int4:
+                return VK_FORMAT_R32G32B32A32_SINT;
+            case VertexFormat::UInt1:
+                return VK_FORMAT_R32_UINT;
+            case VertexFormat::UInt2:
+                return VK_FORMAT_R32G32_UINT;
+            case VertexFormat::UInt3:
+                return VK_FORMAT_R32G32B32_UINT;
+            case VertexFormat::UInt4:
+                return VK_FORMAT_R32G32B32A32_UINT;
+        }
+        return VK_FORMAT_UNDEFINED;
+    }
 } // namespace OZZ::rendering::vk

@@ -4,7 +4,6 @@
 
 #include "physical_devices.h"
 
-#include "ozz_rendering/scratch/util.h"
 #include "spdlog/spdlog.h"
 
 #include <ranges>

@@ -1,266 +1,59 @@
-#include <iostream>
-#include <volk.h>
-
-#include <GLFW/glfw3.h>
-#include <spdlog/spdlog.h>
-
-#include <filesystem>
-
-#include "ozz_rendering/include/ozz_rendering/scratch/core.h"
-#include "ozz_rendering/scratch/util.h"
-#include "ozz_rendering/scratch/vulkan_queue.h"
-#include "ozz_rendering/src/vulkan/rhi_vulkan_shader.h"
-
+//
+// Created by paulm on 2026-02-21.
+//
 #define WINDOW_WIDTH 800
 #define WINDOW_HEIGHT 600
 
-GLFWwindow* window {nullptr};
+#include <volk.h>
 
-class App {
-public:
-    App() {};
+#include "GLFW/glfw3.h"
+#include "spdlog/spdlog.h"
 
-    ~App() { Shutdown(); }
+#include "ozz_rendering/rhi.h"
 
-    void Init(const std::string& appName, GLFWwindow* window) {
-        vkCore.Init({
-            .AppName = "Test Vulkan",
-            .SurfaceCreationFunction =
-                [window](VkInstance instance, VkSurfaceKHR* surface) {
-                    return glfwCreateWindowSurface(instance, window, nullptr, surface);
-                },
-        });
-        queue = vkCore.GetQueue();
+#include <cstdlib>
 
-        numSwapchainImages = vkCore.GetSwapchainImageCount();
-        std::filesystem::path base = std::filesystem::current_path() / "assets" / "shaders" / "basic";
-        vulkanShader = std::make_unique<OZZ::rendering::vk::RHIVulkanShader>(vkCore.GetDevice(),
-                                                                             OZZ::rendering::ShaderFileParams {
-                                                                                 .Vertex = base / "basic.vert",
-                                                                                 .Fragment = base / "basic.frag",
-                                                                             });
+OZZ::rendering::RHIShaderHandle shader {};
 
-        createCommandBuffers();
-        recordCommandBuffers();
-    }
-
-    void Shutdown() {
-        if (vulkanShader) {
-            vulkanShader->Destroy(vkCore.GetDevice());
-            vulkanShader.reset();
-        }
-        if (!commandBuffers.empty()) {
-            vkCore.FreeCommandBuffers(commandBuffers.size(), commandBuffers.data());
-            commandBuffers.clear();
-        }
-        vkCore.Shutdown();
-    }
-
-    void Render() {
-        const uint32_t imageIndex = queue->AcquireNextImage();
-        queue->SubmitAsync(commandBuffers[imageIndex]);
-        queue->Present(imageIndex);
-        // queue->WaitIdle();
-    }
-
-private:
-    void createCommandBuffers() {
-        commandBuffers.resize(numSwapchainImages);
-        vkCore.CreateCommandBuffers(numSwapchainImages, commandBuffers.data());
-    }
-
-    void recordCommandBuffers() {
-        VkClearColorValue clearColor {
-            0.1f,
-            0.1f,
-            0.1f,
-            1.f,
-        };
-
-        VkClearValue clearValue;
-        clearValue.color = clearColor;
-
-        VkImageMemoryBarrier2 presentToClearBarrier {
-            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
-            .pNext = nullptr,
-            .srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-            .srcAccessMask = 0,
-            .dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-            .dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
-            .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-            .newLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
-            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .image = VK_NULL_HANDLE,
-            .subresourceRange =
-                {
-                    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                    .baseMipLevel = 0,
-                    .levelCount = 1,
-                    .baseArrayLayer = 0,
-                    .layerCount = 1,
-                },
-        };
-
-        VkDependencyInfo presentToClearDependency {
-            .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
-            .pNext = nullptr,
-            .dependencyFlags = 0,
-            .memoryBarrierCount = 0,
-            .pMemoryBarriers = nullptr,
-            .bufferMemoryBarrierCount = 0,
-            .pBufferMemoryBarriers = nullptr,
-            .imageMemoryBarrierCount = 1,
-            .pImageMemoryBarriers = &presentToClearBarrier,
-        };
-
-        VkImageMemoryBarrier2 clearToPresentImageBarrier {
-            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
-            .pNext = nullptr,
-            .srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-            .srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
-            .dstStageMask = VK_PIPELINE_STAGE_NONE,
-            .dstAccessMask = 0,
-            .oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-            .newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .image = VK_NULL_HANDLE,
-            .subresourceRange =
-                {
-                    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                    .baseMipLevel = 0,
-                    .levelCount = 1,
-                    .baseArrayLayer = 0,
-                    .layerCount = 1,
-                },
-        };
-
-        VkDependencyInfo clearToPresentDependency {
-            .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
-            .pNext = nullptr,
-            .dependencyFlags = 0,
-            .memoryBarrierCount = 0,
-            .pMemoryBarriers = nullptr,
-            .bufferMemoryBarrierCount = 0,
-            .pBufferMemoryBarriers = nullptr,
-            .imageMemoryBarrierCount = 1,
-            .pImageMemoryBarriers = &clearToPresentImageBarrier,
-        };
-
-        int i = 0;
-        for (const auto commandBuffer : commandBuffers) {
-            OZZ::vk::BeginCommandBuffer(commandBuffer, 0);
-
-            presentToClearBarrier.image = vkCore.GetSwapchainImage(i);
-
-            vkCmdPipelineBarrier2(commandBuffer, &presentToClearDependency);
-
-            // transition to color attachment optimal
-            VkRenderingAttachmentInfo colorAttachment {
-                .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
-                .pNext = nullptr,
-                .imageView = vkCore.GetSwapchainImageView(i),
-                .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
-                .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
-                .clearValue = clearValue,
-            };
-            VkRenderingInfo renderingInfo {
-                .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
-                .pNext = nullptr,
-                .flags = 0,
-                .renderArea =
+OZZ::rendering::RenderPassDescriptor renderPassDescriptor {
+    .ColorAttachments =
+        {
+            OZZ::rendering::AttachmentDescriptor {
+                .Load = OZZ::rendering::LoadOp::Clear,
+                .Store = OZZ::rendering::StoreOp::Store,
+                .Clear =
                     {
-                        .offset =
-                            {
-                                .x = 0,
-                                .y = 0,
-                            },
-                        .extent =
-                            {
-                                .width = WINDOW_WIDTH,
-                                .height = WINDOW_HEIGHT,
-                            },
+                        .R = 0.3f,
+                        .G = 0.1f,
+                        .B = 0.1f,
+                        .A = 1.f,
                     },
-                .layerCount = 1,
-                .colorAttachmentCount = 1,
-                .pColorAttachments = &colorAttachment,
-                .pDepthAttachment = nullptr,
-                .pStencilAttachment = nullptr,
-            };
-            vkCmdBeginRendering(commandBuffer, &renderingInfo);
-
-            vulkanShader->Bind(vkCore.GetDevice(), commandBuffer);
-            // Viewport and scissor
-            VkViewport viewport {0.f, 0.f, (float)WINDOW_WIDTH, (float)WINDOW_HEIGHT, 0.f, 1.f};
-            VkRect2D scissor {{0, 0}, {WINDOW_WIDTH, WINDOW_HEIGHT}};
-            vkCmdSetViewportWithCount(commandBuffer, 1, &viewport);
-            vkCmdSetScissorWithCount(commandBuffer, 1, &scissor);
-            // Input assembly
-            vkCmdSetPrimitiveTopology(commandBuffer, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
-            vkCmdSetPrimitiveRestartEnable(commandBuffer, VK_FALSE);
-
-            // Rasterization
-            vkCmdSetRasterizerDiscardEnable(commandBuffer, VK_FALSE);
-            vkCmdSetCullMode(commandBuffer, VK_CULL_MODE_NONE);
-            vkCmdSetFrontFace(commandBuffer, VK_FRONT_FACE_COUNTER_CLOCKWISE);
-            vkCmdSetDepthBiasEnable(commandBuffer, VK_FALSE);
-
-            // Depth/stencil
-            vkCmdSetDepthTestEnable(commandBuffer, VK_FALSE);
-            vkCmdSetDepthWriteEnable(commandBuffer, VK_FALSE);
-            vkCmdSetStencilTestEnable(commandBuffer, VK_FALSE);
-
-            // Vertex input (empty for hardcoded vertices in shader)
-            // Declare the function pointer (at class or file scope)
-            vkCmdSetVertexInputEXT(commandBuffer, 0, nullptr, 0, nullptr);
-            auto colorBlendEnabled = VK_FALSE;
-            vkCmdSetColorBlendEnableEXT(commandBuffer, 0, 1, &colorBlendEnabled);
-
-            VkColorComponentFlags colorWriteMasks = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
-                                                    VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
-            vkCmdSetColorWriteMaskEXT(commandBuffer, 0, 1, &colorWriteMasks);
-
-            vkCmdSetAlphaToCoverageEnableEXT(commandBuffer, VK_FALSE);
-            auto sampleMask = 0xFFFFFFFF;
-            vkCmdSetSampleMaskEXT(commandBuffer, VK_SAMPLE_COUNT_1_BIT, &sampleMask);
-            vkCmdSetRasterizationSamplesEXT(commandBuffer, VK_SAMPLE_COUNT_1_BIT);
-            vkCmdSetPolygonModeEXT(commandBuffer, VK_POLYGON_MODE_FILL);
-
-            vkCmdDraw(commandBuffer, 3, 1, 0, 0);
-            vkCmdEndRendering(commandBuffer);
-
-            clearToPresentImageBarrier.image = vkCore.GetSwapchainImage(i);
-
-            vkCmdPipelineBarrier2(commandBuffer, &clearToPresentDependency);
-            const auto result = vkEndCommandBuffer(commandBuffer);
-            CHECK_VK_RESULT(result, "End command buffer");
-            i++;
-        }
-
-        spdlog::info("Command buffers recorded");
-    }
-
-private:
-    OZZ::vk::VulkanCore vkCore;
-    OZZ::vk::VulkanQueue* queue {nullptr};
-    uint32_t numSwapchainImages = 0;
-
-    std::unique_ptr<OZZ::rendering::vk::RHIVulkanShader> vulkanShader;
-    std::vector<VkCommandBuffer> commandBuffers {};
-
-    std::vector<VkFramebuffer> framebuffers;
+                .Layout = OZZ::rendering::TextureLayout::ColorAttachment,
+            },
+        },
+    .ColorAttachmentCount = 1,
+    .DepthAttachment = {},
+    .StencilAttachment = {},
+    .RenderArea =
+        {
+            .X = 0,
+            .Y = 0,
+            .Width = WINDOW_WIDTH,
+            .Height = WINDOW_HEIGHT,
+        },
+    .LayerCount = 1,
 };
 
-void GLFW_KeyCallback(GLFWwindow* window, int key, int scancode, int action, int mods) {
+void GLFW_KeyCallback2(GLFWwindow* window, int key, int scancode, int action, int mods) {
     if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS) {
         glfwSetWindowShouldClose(window, GLFW_TRUE);
     }
 }
 
-int main2() {
+int main() {
     spdlog::set_level(spdlog::level::trace);
+
+    GLFWwindow* window;
     if (!glfwInit()) {
         return 1;
     }
@@ -279,16 +72,92 @@ int main2() {
         exit(EXIT_FAILURE);
     }
 
-    glfwSetKeyCallback(window, GLFW_KeyCallback);
+    glfwSetKeyCallback(window, GLFW_KeyCallback2);
 
-    App app;
-    app.Init("lessons", window);
-    while (!glfwWindowShouldClose(window)) {
-        app.Render();
-        glfwPollEvents();
+    // get native window handle
+
+    // Initialize RHI device
+    // get instance extensions
+    std::vector<std::string> requiredExtensions {};
+    uint32_t numExtensions {0};
+    const char** extensions = glfwGetRequiredInstanceExtensions(&numExtensions);
+
+    if (extensions && numExtensions > 0) {
+        requiredExtensions.reserve(numExtensions);
+        for (uint32_t i = 0; i < numExtensions; i++) {
+            requiredExtensions.emplace_back(extensions[i]);
+        }
     }
 
-    app.Shutdown();
+    auto rhiDevice = OZZ::rendering::CreateRHIDevice({
+        .Backend = OZZ::rendering::RHIBackend::Auto,
+        .Context = {
+            .AppName = "RHI Playground",
+            .AppVersion = {0, 1, 0, 0},
+            .EngineName = "RHI Playground Engine",
+            .EngineVersion = {0, 1, 0, 0},
+            .WindowHandle = window,
+            .RequiredInstanceExtensions = requiredExtensions,
+            .GetWindowFramebufferSizeFunction =
+                [window]() {
+                    int width, height;
+                    glfwGetFramebufferSize(window, &width, &height);
+                    return std::make_pair(width, height);
+                },
+            .CreateSurfaceFunction =
+                [window](void* instance, void* surface) {
+                    return glfwCreateWindowSurface(static_cast<VkInstance>(instance),
+                                                   window,
+                                                   nullptr,
+                                                   static_cast<VkSurfaceKHR*>(surface)) == VK_SUCCESS;
+                },
+        },
+    });
+
+    std::filesystem::path base = std::filesystem::current_path() / "assets" / "shaders" / "basic";
+    shader = rhiDevice->CreateShader(OZZ::rendering::ShaderFileParams {
+        .Vertex = base / "basic.vert",
+        .Fragment = base / "basic.frag",
+    });
+
+    while (!glfwWindowShouldClose(window)) {
+        glfwPollEvents();
+        auto context = rhiDevice->BeginFrame();
+        renderPassDescriptor.ColorAttachments[0].Texture = context.GetBackbuffer();
+        rhiDevice->BeginRenderPass(context.GetCommandBuffer(), renderPassDescriptor);
+        rhiDevice->SetGraphicsState(context.GetCommandBuffer(),
+                                    {
+                                        .ColorBlend = {{
+                                            .BlendEnable = false,
+                                        }},
+                                        .ColorBlendAttachmentCount = 1,
+                                    });
+        rhiDevice->SetViewport(context.GetCommandBuffer(),
+                               {
+                                   .X = 0,
+                                   .Y = 0,
+                                   .Width = WINDOW_WIDTH,
+                                   .Height = WINDOW_HEIGHT,
+                                   .MinDepth = 0.f,
+                                   .MaxDepth = 1.f,
+                               });
+        rhiDevice->SetScissor(context.GetCommandBuffer(),
+                              {
+                                  .X = 0,
+                                  .Y = 0,
+                                  .Width = WINDOW_WIDTH,
+                                  .Height = WINDOW_HEIGHT,
+                              });
+        rhiDevice->BindShader(context.GetCommandBuffer(), shader);
+
+        // Bind material
+        rhiDevice->Draw(context.GetCommandBuffer(), 3, 1, 0, 0);
+
+        rhiDevice->EndRenderPass(context.GetCommandBuffer());
+        rhiDevice->SubmitAndPresentFrame(std::move(context));
+    }
+
+    rhiDevice.reset();
     glfwTerminate();
     return 0;
 }
