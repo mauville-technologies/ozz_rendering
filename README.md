@@ -1,8 +1,12 @@
 # ozz_rendering
 
-A reusable C++23 RHI (Render Hardware Interface) library that provides a clean, handle-based GPU API. The current backend is **Vulkan**; an **OpenGL** backend is planned.
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/mauville-technologies/ozz_rendering)
 
-The API is intentionally backend-agnostic — calling code never touches Vulkan types directly. The same render loop will work across all supported backends.
+A reusable C++23 RHI (Render Hardware Interface) library that provides a clean, handle-based GPU API. The current
+backend is **Vulkan**; an **OpenGL** backend is planned.
+
+The API is intentionally backend-agnostic — calling code never touches Vulkan types directly. The same render loop will
+work across all supported backends.
 
 ---
 
@@ -10,8 +14,10 @@ The API is intentionally backend-agnostic — calling code never touches Vulkan 
 
 - **No `VkPipeline` objects** — shaders are bound via `VK_EXT_shader_object` (`VkShaderEXT` per stage)
 - **No `VkRenderPass` objects** — dynamic rendering via `VK_KHR_dynamic_rendering`
-- **Fully dynamic graphics state** — topology, rasterization, depth/stencil, vertex input, and blending are all set per-draw via `vkCmdSetXxx` (`VK_EXT_extended_dynamic_state3`, `VK_EXT_vertex_input_dynamic_state`)
-- **Generational resource handles** — all GPU resources are identified by opaque `RHIHandle<Tag>` values; no raw Vulkan handles leak through the public API
+- **Fully dynamic graphics state** — topology, rasterization, depth/stencil, vertex input, and blending are all set
+  per-draw via `vkCmdSetXxx` (`VK_EXT_extended_dynamic_state3`, `VK_EXT_vertex_input_dynamic_state`)
+- **Generational resource handles** — all GPU resources are identified by opaque `RHIHandle<Tag>` values; no raw Vulkan
+  handles leak through the public API
 - **Runtime GLSL compilation** — shaders are compiled from GLSL source (or files) to SPIR-V at runtime via glslang
 - **VMA** for GPU memory allocation
 - **volk** for Vulkan function loading (zero static Vulkan linkage)
@@ -20,12 +26,12 @@ The API is intentionally backend-agnostic — calling code never touches Vulkan 
 
 ## Requirements
 
-| Requirement | Minimum |
-|---|---|
-| C++ standard | C++23 |
-| CMake | 3.20 |
-| Vulkan SDK | 1.4 (tested with 1.4.341) |
-| GPU | Vulkan 1.3 + `VK_EXT_shader_object` + `VK_EXT_vertex_input_dynamic_state` + `VK_EXT_extended_dynamic_state3` |
+| Requirement  | Minimum                                                                                                      |
+|--------------|--------------------------------------------------------------------------------------------------------------|
+| C++ standard | C++23                                                                                                        |
+| CMake        | 3.20                                                                                                         |
+| Vulkan SDK   | 1.4 (tested with 1.4.341)                                                                                    |
+| GPU          | Vulkan 1.3 + `VK_EXT_shader_object` + `VK_EXT_vertex_input_dynamic_state` + `VK_EXT_extended_dynamic_state3` |
 
 All other dependencies (volk, VMA, spdlog, glslang) are fetched automatically by CMake via `FetchContent`.
 
@@ -50,8 +56,8 @@ The compiled sample binary is placed under `dist/<OS>/<BuildType>/ozz_rendering_
 add_subdirectory(ozz_rendering)
 
 target_link_libraries(my_app
-    PRIVATE
-    ozz_rendering
+        PRIVATE
+        ozz_rendering
 )
 ```
 
@@ -119,22 +125,23 @@ See [`main.cpp`](main.cpp) for a complete working example using GLFW.
 
 ## Repository layout
 
-| Path | Contents |
-|---|---|
-| `ozz_rendering/include/` | Public headers (`rhi.h` and friends) |
-| `ozz_rendering/src/` | Library implementation |
-| `ozz_rendering/src/vulkan/` | Vulkan backend |
-| `ozz_rendering/third_party/` | CMake wiring for volk, VMA, spdlog, glslang |
-| `main.cpp` | Sample application (GLFW window + render loop) |
-| `assets/shaders/` | GLSL shaders for the sample app |
-| `docs/` | Architecture overview and API reference |
-| `dist/` | Compiled output (generated, not committed) |
+| Path                         | Contents                                       |
+|------------------------------|------------------------------------------------|
+| `ozz_rendering/include/`     | Public headers (`rhi.h` and friends)           |
+| `ozz_rendering/src/`         | Library implementation                         |
+| `ozz_rendering/src/vulkan/`  | Vulkan backend                                 |
+| `ozz_rendering/third_party/` | CMake wiring for volk, VMA, spdlog, glslang    |
+| `main.cpp`                   | Sample application (GLFW window + render loop) |
+| `assets/shaders/`            | GLSL shaders for the sample app                |
+| `docs/`                      | Architecture overview and API reference        |
+| `dist/`                      | Compiled output (generated, not committed)     |
 
 ---
 
 ## Current status
 
 **Working**
+
 - Vulkan 1.3 device initialisation (instance, surface, physical device selection, logical device, swapchain)
 - Frame lifecycle: `BeginFrame` / `SubmitAndPresentFrame`
 - Dynamic rendering (no render pass objects)
@@ -144,6 +151,7 @@ See [`main.cpp`](main.cpp) for a complete working example using GLFW.
 - Triangle rendered with hardcoded shader vertices
 
 **Planned**
+
 - Vertex and index buffer support
 - Texture creation and sampling
 - Descriptor sets / uniform buffers
