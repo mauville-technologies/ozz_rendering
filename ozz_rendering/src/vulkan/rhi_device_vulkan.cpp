@@ -525,12 +525,15 @@ namespace OZZ::rendering::vk {
         vkCmdDraw(*commandBuffer, vertexCount, instanceCount, firstVertex, firstInstance);
     }
 
-    void RHIDeviceVulkan::DrawIndexed(const RHICommandBufferHandle&,
+    void RHIDeviceVulkan::DrawIndexed(const RHICommandBufferHandle& commandBufferHandle,
                                       uint32_t indexCount,
                                       uint32_t instanceCount,
                                       uint32_t firstIndex,
                                       int32_t vertexOffset,
-                                      uint32_t firstInstance) {}
+                                      uint32_t firstInstance) {
+        const auto* commandBuffer = commandBufferResourcePool.Get(commandBufferHandle);
+        vkCmdDrawIndexed(*commandBuffer, indexCount, instanceCount, firstIndex, vertexOffset, firstInstance);
+    }
 
     RHITextureHandle RHIDeviceVulkan::CreateTexture() {
         return RHITextureHandle::Null();
@@ -654,6 +657,11 @@ namespace OZZ::rendering::vk {
         const auto commandBuffer = *commandBufferResourcePool.Get(commandBufferHandle);
         if (has(buffer->Usage, BufferUsage::VertexBuffer)) {
             vkCmdBindVertexBuffers2(commandBuffer, 0, 1, &buffer->Buffer, (VkDeviceSize[]) {0}, nullptr, nullptr);
+            return;
+        }
+
+        if (has(buffer->Usage, BufferUsage::IndexBuffer)) {
+            vkCmdBindIndexBuffer(commandBuffer, buffer->Buffer, 0, VK_INDEX_TYPE_UINT32);
             return;
         }
         assert(false && "Buffer type not implemented.");

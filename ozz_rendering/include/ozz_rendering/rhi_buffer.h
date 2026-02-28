@@ -8,6 +8,7 @@
 
 namespace OZZ::rendering {
 
+    using IndexBufferElementType = uint32_t;
     enum class BufferMemoryAccess : uint8_t {
         GpuOnly,
         CpuToGpu,

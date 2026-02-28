@@ -164,6 +164,17 @@ int main() {
         return 1;
     }
 
+    auto indexBuffer = rhiDevice->CreateBuffer(OZZ::rendering::BufferDescriptor {
+        .Size = 3 * sizeof(OZZ::rendering::IndexBufferElementType),
+        .Usage = OZZ::rendering::BufferUsage::IndexBuffer,
+        .Access = OZZ::rendering::BufferMemoryAccess::CpuToGpu,
+    });
+
+    if (!indexBuffer.IsValid()) {
+        spdlog::error("Failed to create index buffer");
+        return 1;
+    }
+
     rhiDevice->UpdateBuffer(vertexBuffer,
                             std::array {
                                 Vertex {{0.f, -0.5f, 0.5f}, {1.f, 1.f, 0.f, 1.f}},
@@ -173,6 +184,17 @@ int main() {
                                 .data(),
                             sizeof(Vertex) * 3,
                             0);
+
+    rhiDevice->UpdateBuffer(indexBuffer,
+                            std::array {
+                                OZZ::rendering::IndexBufferElementType {0},
+                                OZZ::rendering::IndexBufferElementType {1},
+                                OZZ::rendering::IndexBufferElementType {2},
+                            }
+                                .data(),
+                            sizeof(OZZ::rendering::IndexBufferElementType) * 3,
+                            0);
+
     const auto attributeDescriptions = Vertex::GetAttributeDescriptions();
     const auto bindingDescriptions = Vertex::GetBindingDescription();
 
@@ -214,8 +236,9 @@ int main() {
         rhiDevice->BindShader(context.GetCommandBuffer(), shader);
 
         rhiDevice->BindBuffer(context.GetCommandBuffer(), vertexBuffer);
+        rhiDevice->BindBuffer(context.GetCommandBuffer(), indexBuffer);
         // Bind material
-        rhiDevice->Draw(context.GetCommandBuffer(), 3, 1, 0, 0);
+        rhiDevice->DrawIndexed(context.GetCommandBuffer(), 3, 1, 0, 0, 0);
 
         rhiDevice->EndRenderPass(context.GetCommandBuffer());
         rhiDevice->SubmitAndPresentFrame(std::move(context));
