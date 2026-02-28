@@ -4,15 +4,14 @@
 
 #pragma once
 
-#include <volk.h>
-
 #include "ozz_rendering/utils/resource_pool.h"
+#include "rhi_buffer_vulkan.h"
 
+#include "rhi_shader_vulkan.h"
 #include "rhi_texture_vulkan.h"
-#include "rhi_vulkan_shader.h"
 #include "utils/physical_devices.h"
 
-#include <ozz_rendering/rhi.h>
+#include <ozz_rendering/rhi_device.h>
 
 namespace OZZ::rendering::vk {
     constexpr uint32_t MaxFramesInFlight = 2;
@@ -37,7 +36,9 @@ namespace OZZ::rendering::vk {
         void BeginRenderPass(const RHICommandBufferHandle&, const RenderPassDescriptor&) override;
         void EndRenderPass(const RHICommandBufferHandle&) override;
 
+        // Barriers
         void TextureResourceBarrier(const RHICommandBufferHandle&, const TextureBarrierDescriptor&) override;
+        void BufferMemoryBarrier(const RHICommandBufferHandle&, const BufferBarrierDescriptor&) override;
 
         void SetViewport(const RHICommandBufferHandle&, const Viewport&) override;
         void SetScissor(const RHICommandBufferHandle&, const Scissor&) override;
@@ -64,6 +65,20 @@ namespace OZZ::rendering::vk {
         RHIShaderHandle CreateShader(ShaderSourceParams&& shaderSources) override;
         void FreeShader(const RHIShaderHandle&) override;
         void BindShader(const RHICommandBufferHandle&, const RHIShaderHandle&) override;
+
+        RHIBufferHandle CreateBuffer(BufferDescriptor&& bufferDescriptor) override;
+        void UpdateBuffer(const RHIBufferHandle&, const void* data, size_t size, size_t offset) override;
+
+        void BindBuffer(const RHICommandBufferHandle& commandBufferHandle, RHIBufferHandle& bufferHandle) override;
+        void BindUniformBuffer(const RHICommandBufferHandle& commandBufferHandle,
+                               const RHIBufferHandle& bufferHandle,
+                               uint32_t set,
+                               uint32_t binding) override;
+        void SetPushConstants(const RHICommandBufferHandle& commandBufferHandle,
+                              std::set<ShaderStage> stageFlags,
+                              uint32_t offset,
+                              uint32_t size,
+                              const void* data) override;
 
     private:
         bool initialize();
@@ -118,6 +133,7 @@ namespace OZZ::rendering::vk {
         // resource pools
         ResourcePool<TextureTag, RHITextureVulkan> texturePool;
         ResourcePool<CommandBufferTag, VkCommandBuffer> commandBufferResourcePool;
-        ResourcePool<ShaderTag, RHIVulkanShader> shaderResourcePool;
+        ResourcePool<ShaderTag, RHIShaderVulkan> shaderResourcePool;
+        ResourcePool<BufferTag, RHIBufferVulkan> bufferResourcePool;
     };
 } // namespace OZZ::rendering::vk

@@ -7,11 +7,43 @@
 #include <volk.h>
 
 #include "GLFW/glfw3.h"
+#include "glm/vec4.hpp"
 #include "spdlog/spdlog.h"
 
-#include "ozz_rendering/rhi.h"
+#include "ozz_rendering/rhi_device.h"
 
 #include <cstdlib>
+#include <glm/glm.hpp>
+
+struct Vertex {
+    glm::vec3 Position {0.f, 0.f, 1.f};
+    glm::vec4 Color {1.f, 0.f, 0.f, 1.f};
+
+    static OZZ::rendering::VertexInputBindingDescriptor GetBindingDescription() {
+        return {
+            .Binding = 0,
+            .Stride = sizeof(Vertex),
+            .InputRate = OZZ::rendering::VertexInputRate::Vertex,
+        };
+    }
+
+    static std::array<OZZ::rendering::VertexInputAttributeDescriptor, 2> GetAttributeDescriptions() {
+        return {
+            OZZ::rendering::VertexInputAttributeDescriptor {
+                .Location = 0,
+                .Binding = 0,
+                .Format = OZZ::rendering::VertexFormat::Float3,
+                .Offset = offsetof(Vertex, Position),
+            },
+            OZZ::rendering::VertexInputAttributeDescriptor {
+                .Location = 1,
+                .Binding = 0,
+                .Format = OZZ::rendering::VertexFormat::Float4,
+                .Offset = offsetof(Vertex, Color),
+            },
+        };
+    }
+};
 
 OZZ::rendering::RHIShaderHandle shader {};
 
@@ -120,6 +152,30 @@ int main() {
         .Fragment = base / "basic.frag",
     });
 
+    // Let's create my vertex buffer now
+    auto vertexBuffer = rhiDevice->CreateBuffer(OZZ::rendering::BufferDescriptor {
+        .Size = 3 * sizeof(Vertex),
+        .Usage = OZZ::rendering::BufferUsage::VertexBuffer,
+        .Access = OZZ::rendering::BufferMemoryAccess::CpuToGpu,
+    });
+
+    if (!vertexBuffer.IsValid()) {
+        spdlog::error("Failed to create vertex buffer");
+        return 1;
+    }
+
+    rhiDevice->UpdateBuffer(vertexBuffer,
+                            std::array {
+                                Vertex {{0.f, -0.5f, 0.5f}, {1.f, 1.f, 0.f, 1.f}},
+                                Vertex {{0.5f, 0.5f, 0.5f}, {0.f, 1.f, 1.f, 1.f}},
+                                Vertex {{-0.5f, 0.5f, 0.5f}, {0.f, 0.f, 1.f, 1.f}},
+                            }
+                                .data(),
+                            sizeof(Vertex) * 3,
+                            0);
+    const auto attributeDescriptions = Vertex::GetAttributeDescriptions();
+    const auto bindingDescriptions = Vertex::GetBindingDescription();
+
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
         auto context = rhiDevice->BeginFrame();
@@ -131,6 +187,13 @@ int main() {
                                             .BlendEnable = false,
                                         }},
                                         .ColorBlendAttachmentCount = 1,
+                                        .VertexInput =
+                                            {
+                                                .Bindings = {bindingDescriptions},
+                                                .BindingCount = 1,
+                                                .Attributes = {attributeDescriptions[0], attributeDescriptions[1]},
+                                                .AttributeCount = attributeDescriptions.size(),
+                                            },
                                     });
         rhiDevice->SetViewport(context.GetCommandBuffer(),
                                {
@@ -150,6 +213,7 @@ int main() {
                               });
         rhiDevice->BindShader(context.GetCommandBuffer(), shader);
 
+        rhiDevice->BindBuffer(context.GetCommandBuffer(), vertexBuffer);
         // Bind material
         rhiDevice->Draw(context.GetCommandBuffer(), 3, 1, 0, 0);
 

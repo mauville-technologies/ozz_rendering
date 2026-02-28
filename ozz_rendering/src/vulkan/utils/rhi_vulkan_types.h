@@ -4,6 +4,9 @@
 
 #pragma once
 
+#include "ozz_rendering/rhi_buffer.h"
+#include <volk.h>
+
 namespace OZZ::rendering::vk {
     inline VkPipelineStageFlags2 ConvertPipelineStageToVulkan(const PipelineStage stage) {
         switch (stage) {
@@ -215,5 +218,39 @@ namespace OZZ::rendering::vk {
                 return VK_FORMAT_R32G32B32A32_UINT;
         }
         return VK_FORMAT_UNDEFINED;
+    }
+
+    inline VkBufferUsageFlags ConvertBufferUsageToVulkan(const BufferUsage usage) {
+        VkBufferUsageFlags flags = 0;
+        auto u = usage;
+
+        if (has(u, BufferUsage::VertexBuffer))
+            flags |= VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+        if (has(u, BufferUsage::IndexBuffer))
+            flags |= VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
+        if (has(u, BufferUsage::UniformBuffer))
+            flags |= VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+        if (has(u, BufferUsage::StorageBuffer))
+            flags |= VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+        if (has(u, BufferUsage::TransferSource))
+            flags |= VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+        if (has(u, BufferUsage::TransferDestination))
+            flags |= VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+        if (has(u, BufferUsage::Indirect))
+            flags |= VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
+
+        return flags;
+    }
+
+    inline VmaMemoryUsage ConvertMemoryAccessToVulkan(const BufferMemoryAccess access) {
+        switch (access) {
+            case BufferMemoryAccess::GpuOnly:
+                return VMA_MEMORY_USAGE_GPU_ONLY;
+            case BufferMemoryAccess::CpuToGpu:
+                return VMA_MEMORY_USAGE_CPU_TO_GPU;
+            case BufferMemoryAccess::GpuToCpu:
+                return VMA_MEMORY_USAGE_GPU_TO_CPU;
+        }
+        return VMA_MEMORY_USAGE_GPU_ONLY;
     }
 } // namespace OZZ::rendering::vk

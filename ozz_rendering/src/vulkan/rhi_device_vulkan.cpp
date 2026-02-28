@@ -56,8 +56,11 @@ namespace OZZ::rendering::vk {
                 vkFreeCommandBuffers(device, commandBufferPool, 1, &commandBuffer);
             }
         })
-        , shaderResourcePool([this](RHIVulkanShader& shader) {
+        , shaderResourcePool([this](RHIShaderVulkan& shader) {
             shader.Destroy(device);
+        })
+        , bufferResourcePool([this](const RHIBufferVulkan& buffer) {
+            vmaDestroyBuffer(vmaAllocator, buffer.Buffer, buffer.Allocation);
         }) {
 
         auto result = volkInitialize();
@@ -76,6 +79,7 @@ namespace OZZ::rendering::vk {
         }
 
         // clear resource pools
+        bufferResourcePool.Empty();
         shaderResourcePool.Empty();
         texturePool.Empty();
         commandBufferResourcePool.Empty();
@@ -404,6 +408,10 @@ namespace OZZ::rendering::vk {
         vkCmdPipelineBarrier2(commandBuffer, &barrierDependency);
     }
 
+    void RHIDeviceVulkan::BufferMemoryBarrier(const RHICommandBufferHandle&, const BufferBarrierDescriptor&) {
+        assert(false && "Buffer memory barriers not implemented!!");
+    }
+
     void RHIDeviceVulkan::SetViewport(const RHICommandBufferHandle& commandBufferHandle, const Viewport& viewport) {
         const auto* commandBuffer = commandBufferResourcePool.Get(commandBufferHandle);
         VkViewport vkViewport {
@@ -529,7 +537,7 @@ namespace OZZ::rendering::vk {
     }
 
     RHIShaderHandle RHIDeviceVulkan::CreateShader(ShaderFileParams&& shaderFiles) {
-        RHIVulkanShader shader {device, std::move(shaderFiles)};
+        RHIShaderVulkan shader {device, std::move(shaderFiles)};
         if (!shader.IsValid()) {
             spdlog::error("Failed to create shader from files. Aborting process. See logs for details.");
             return RHIShaderHandle::Null();
@@ -539,7 +547,7 @@ namespace OZZ::rendering::vk {
     }
 
     RHIShaderHandle RHIDeviceVulkan::CreateShader(ShaderSourceParams&& shaderSources) {
-        RHIVulkanShader shader {device, std::move(shaderSources)};
+        RHIShaderVulkan shader {device, std::move(shaderSources)};
         if (!shader.IsValid()) {
             spdlog::error("Failed to create shader from files. Aborting process. See logs for details.");
             return RHIShaderHandle::Null();
@@ -559,6 +567,108 @@ namespace OZZ::rendering::vk {
             shader->Bind(device, commandBuffer);
         }
     }
+
+    RHIBufferHandle RHIDeviceVulkan::CreateBuffer(BufferDescriptor&& bufferDescriptor) {
+        VkBufferCreateInfo bufferCreateInfo {
+            .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .size = bufferDescriptor.Size,
+            .usage = ConvertBufferUsageToVulkan(bufferDescriptor.Usage),
+            .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+            .queueFamilyIndexCount = 0,
+            .pQueueFamilyIndices = nullptr,
+        };
+
+        VmaAllocationCreateInfo allocationCreateInfo {
+            .flags = VMA_ALLOCATION_CREATE_MAPPED_BIT,
+            .usage = ConvertMemoryAccessToVulkan(bufferDescriptor.Access),
+            .requiredFlags = 0,
+            .preferredFlags = 0,
+            .memoryTypeBits = 0,
+            .pool = VK_NULL_HANDLE,
+            .pUserData = nullptr,
+        };
+
+        VkBuffer buffer;
+        VmaAllocation allocation;
+        VmaAllocationInfo allocationInfo;
+        if (const auto result = vmaCreateBuffer(vmaAllocator,
+                                                &bufferCreateInfo,
+                                                &allocationCreateInfo,
+                                                &buffer,
+                                                &allocation,
+                                                &allocationInfo);
+            result != VK_SUCCESS) {
+            spdlog::error("Failed to create buffer. Error: {}", static_cast<int>(result));
+            return RHIBufferHandle::Null();
+        }
+
+        const auto handle = bufferResourcePool.Allocate({
+            .Buffer = buffer,
+            .Allocation = allocation,
+            .AllocationInfo = allocationInfo,
+            .Usage = bufferDescriptor.Usage,
+            .Access = bufferDescriptor.Access,
+        });
+
+        return handle;
+    }
+
+    void
+    RHIDeviceVulkan::UpdateBuffer(const RHIBufferHandle& bufferHandle, const void* data, size_t size, size_t offset) {
+        const auto buffer = bufferResourcePool.Get(bufferHandle);
+        if (!buffer) {
+            spdlog::error("Failed to update buffer. Buffer handle is invalid.");
+            return;
+        }
+
+        // ensure usage is CPU accessible
+        if (buffer->Access == BufferMemoryAccess::GpuOnly) {
+            spdlog::error("Failed to update buffer. Buffer is not CPU accessible.");
+            return;
+        }
+
+        // make sure offset + size does not exceed buffer size
+        if (offset + size > buffer->AllocationInfo.size) {
+            spdlog::error("Failed to update buffer. Data size exceeds buffer size.");
+            return;
+        }
+
+        void* mappedData = buffer->AllocationInfo.pMappedData;
+        if (!mappedData) {
+            spdlog::error("Failed to update buffer. Buffer memory is not mapped.");
+            return;
+        }
+        std::memcpy(static_cast<uint8_t*>(mappedData) + offset, data, size);
+        vmaFlushAllocation(vmaAllocator, buffer->Allocation, offset, size);
+    }
+
+    void RHIDeviceVulkan::BindBuffer(const RHICommandBufferHandle& commandBufferHandle, RHIBufferHandle& bufferHandle) {
+        const auto buffer = bufferResourcePool.Get(bufferHandle);
+        if (!buffer) {
+            spdlog::error("Failed to bind buffer. Buffer handle is invalid.");
+            return;
+        }
+
+        const auto commandBuffer = *commandBufferResourcePool.Get(commandBufferHandle);
+        if (has(buffer->Usage, BufferUsage::VertexBuffer)) {
+            vkCmdBindVertexBuffers2(commandBuffer, 0, 1, &buffer->Buffer, (VkDeviceSize[]) {0}, nullptr, nullptr);
+            return;
+        }
+        assert(false && "Buffer type not implemented.");
+    }
+
+    void RHIDeviceVulkan::BindUniformBuffer(const RHICommandBufferHandle& commandBufferHandle,
+                                            const RHIBufferHandle& bufferHandle,
+                                            uint32_t set,
+                                            uint32_t binding) {}
+
+    void RHIDeviceVulkan::SetPushConstants(const RHICommandBufferHandle& commandBufferHandle,
+                                           std::set<ShaderStage> stageFlags,
+                                           uint32_t offset,
+                                           uint32_t size,
+                                           const void* data) {}
 
     bool RHIDeviceVulkan::initialize() {
         spdlog::info("Initializing Vulkan RHI device");

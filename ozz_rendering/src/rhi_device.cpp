@@ -3,7 +3,7 @@
 //
 
 #include "../include/ozz_rendering/utils/resource_pool.h"
-#include <ozz_rendering/rhi.h>
+#include <ozz_rendering/rhi_device.h>
 
 #include "vulkan/rhi_device_vulkan.h"
 

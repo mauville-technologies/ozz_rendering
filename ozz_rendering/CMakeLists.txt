@@ -12,11 +12,12 @@ set(SOURCES
 
         src/vulkan/utils/physical_devices.cpp
 
-        src/rhi.cpp
+        src/rhi_device.cpp
         src/vulkan/vma.cpp
+        src/vulkan/rhi_buffer_vulkan.cpp
         src/vulkan/rhi_device_vulkan.cpp
+        src/vulkan/rhi_shader_vulkan.cpp
         src/vulkan/rhi_texture_vulkan.cpp
-        src/vulkan/rhi_vulkan_shader.cpp
 )
 add_library(${PROJECT_NAME} STATIC ${SOURCES})
 

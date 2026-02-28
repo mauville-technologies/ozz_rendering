@@ -8,7 +8,7 @@
 #include <optional>
 #include <vector>
 
-#include <ozz_rendering/rhi.h>
+#include <ozz_rendering/rhi_device.h>
 
 namespace OZZ::rendering {
     template <typename ResourceType>

@@ -2,7 +2,7 @@
 // Created by paulm on 2026-02-17.
 //
 
-#include "rhi_vulkan_shader.h"
+#include "rhi_shader_vulkan.h"
 
 #include "spdlog/spdlog.h"
 
@@ -12,7 +12,7 @@
 #include <glslang/SPIRV/GlslangToSpv.h>
 
 namespace OZZ::rendering::vk {
-    RHIVulkanShader::RHIVulkanShader(VkDevice device, ShaderFileParams&& shaderFiles) {
+    RHIShaderVulkan::RHIShaderVulkan(VkDevice device, ShaderFileParams&& shaderFiles) {
         // load files
         std::ifstream vertexFile(shaderFiles.Vertex);
         std::ifstream fragmentFile(shaderFiles.Fragment);
@@ -42,15 +42,15 @@ namespace OZZ::rendering::vk {
                                   });
     }
 
-    RHIVulkanShader::RHIVulkanShader(VkDevice device, ShaderSourceParams&& shaderSources) {
+    RHIShaderVulkan::RHIShaderVulkan(VkDevice device, ShaderSourceParams&& shaderSources) {
         bIsValid = compileSources(device, std::move(shaderSources));
     }
 
-    void RHIVulkanShader::Bind(VkDevice device, VkCommandBuffer commandBuffer) const {
+    void RHIShaderVulkan::Bind(VkDevice device, VkCommandBuffer commandBuffer) const {
         vkCmdBindShadersEXT(commandBuffer, shaderStages.size(), shaderStages.data(), shaders.data());
     }
 
-    void RHIVulkanShader::Destroy(VkDevice vk_device) {
+    void RHIShaderVulkan::Destroy(VkDevice vk_device) {
         for (auto shader : shaders) {
             if (shader != VK_NULL_HANDLE) {
                 vkDestroyShaderEXT(vk_device, shader, nullptr);
@@ -60,7 +60,7 @@ namespace OZZ::rendering::vk {
         shaderStages.clear();
     }
 
-    bool RHIVulkanShader::compileSources(VkDevice device, ShaderSourceParams&& shaderSources) {
+    bool RHIShaderVulkan::compileSources(VkDevice device, ShaderSourceParams&& shaderSources) {
         shaderStages.clear();
         shaders.clear();
 
@@ -158,7 +158,7 @@ namespace OZZ::rendering::vk {
         return true;
     }
 
-    std::optional<CompiledShaderProgram> RHIVulkanShader::compileProgram(const ShaderSourceParams& shaderSources) {
+    std::optional<CompiledShaderProgram> RHIShaderVulkan::compileProgram(const ShaderSourceParams& shaderSources) {
         glslang::InitializeProcess();
 
         // vertex and fragment are mandatory
@@ -213,7 +213,7 @@ namespace OZZ::rendering::vk {
         return compiled;
     }
 
-    std::pair<bool, std::unique_ptr<glslang::TShader>> RHIVulkanShader::compileShader(const ShaderStage stage,
+    std::pair<bool, std::unique_ptr<glslang::TShader>> RHIShaderVulkan::compileShader(const ShaderStage stage,
                                                                                       const std::string& glslCode) {
         auto shader = std::make_unique<glslang::TShader>(ToGLSLANGShaderStage(stage));
         const char* code = glslCode.c_str();

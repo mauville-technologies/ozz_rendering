@@ -9,6 +9,12 @@
 
 namespace OZZ::rendering {
 
+    enum class ShaderStage {
+        Vertex,
+        Geometry,
+        Fragment,
+    };
+
     struct ShaderSourceParams {
         std::string Vertex;
         std::string Geometry;

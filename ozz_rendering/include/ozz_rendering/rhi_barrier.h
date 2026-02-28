@@ -22,4 +22,15 @@ namespace OZZ::rendering {
         uint32_t DstQueueFamily {QueueFamilyIgnored};
     };
 
+    struct BufferBarrierDescriptor {
+        RHIBufferHandle Buffer {};
+        size_t Offset {0};
+        size_t Size {0};
+        PipelineStage SrcStage {PipelineStage::None};
+        PipelineStage DstStage {PipelineStage::None};
+        Access SrcAccess {Access::None};
+        Access DstAccess {Access::None};
+        uint32_t SrcQueueFamily {QueueFamilyIgnored};
+        uint32_t DstQueueFamily {QueueFamilyIgnored};
+    };
 } // namespace OZZ::rendering

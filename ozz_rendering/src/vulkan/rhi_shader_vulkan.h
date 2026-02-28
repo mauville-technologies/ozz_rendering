@@ -19,12 +19,6 @@ namespace OZZ::rendering::vk {
         std::vector<uint32_t> FragmentSpirv;
     };
 
-    enum class ShaderStage {
-        Vertex,
-        Geometry,
-        Fragment,
-    };
-
     inline EShLanguage ToGLSLANGShaderStage(const ShaderStage stage) {
         switch (stage) {
             case ShaderStage::Vertex:
@@ -37,10 +31,10 @@ namespace OZZ::rendering::vk {
         return EShLangCount;
     }
 
-    class RHIVulkanShader {
+    class RHIShaderVulkan {
     public:
-        RHIVulkanShader(VkDevice device, ShaderFileParams&& shaderFiles);
-        RHIVulkanShader(VkDevice device, ShaderSourceParams&& shaderSources);
+        RHIShaderVulkan(VkDevice device, ShaderFileParams&& shaderFiles);
+        RHIShaderVulkan(VkDevice device, ShaderSourceParams&& shaderSources);
 
         void Bind(VkDevice device, VkCommandBuffer commandBuffer) const;
         void Destroy(VkDevice vk_device);
