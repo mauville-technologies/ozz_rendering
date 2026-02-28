@@ -165,7 +165,7 @@ int main() {
     }
 
     auto indexBuffer = rhiDevice->CreateBuffer(OZZ::rendering::BufferDescriptor {
-        .Size = 3 * sizeof(OZZ::rendering::IndexBufferElementType),
+        .Size = 3 * OZZ::rendering::IndexBufferElementSize,
         .Usage = OZZ::rendering::BufferUsage::IndexBuffer,
         .Access = OZZ::rendering::BufferMemoryAccess::CpuToGpu,
     });
@@ -192,7 +192,7 @@ int main() {
                                 OZZ::rendering::IndexBufferElementType {2},
                             }
                                 .data(),
-                            sizeof(OZZ::rendering::IndexBufferElementType) * 3,
+                            OZZ::rendering::IndexBufferElementSize * 3,
                             0);
 
     const auto attributeDescriptions = Vertex::GetAttributeDescriptions();

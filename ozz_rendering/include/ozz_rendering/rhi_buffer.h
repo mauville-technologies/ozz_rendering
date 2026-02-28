@@ -9,6 +9,8 @@
 namespace OZZ::rendering {
 
     using IndexBufferElementType = uint32_t;
+    constexpr auto IndexBufferElementSize = sizeof(IndexBufferElementType);
+
     enum class BufferMemoryAccess : uint8_t {
         GpuOnly,
         CpuToGpu,
