@@ -239,7 +239,8 @@ namespace OZZ::rendering::vk {
             return;
         }
 
-        auto& submissionContext = submissionContexts[GetFrameNumberFromFrameContext(frameContext)];
+        const auto frameNumber = GetFrameNumberFromFrameContext(frameContext);
+        auto& submissionContext = submissionContexts[frameNumber];
         VkPipelineStageFlags waitFlags {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
         VkSubmitInfo submitInfo {
             .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
@@ -257,7 +258,7 @@ namespace OZZ::rendering::vk {
             spdlog::error("Failed to submit command buffer in SubmitFrame. Error: {} | {} / {} | {:x}",
                           static_cast<int>(result),
                           imageIndex,
-                          currentFrame,
+                          frameNumber,
                           reinterpret_cast<uint64_t>(presentCompleteSemaphores[imageIndex]));
             return;
         }
@@ -537,7 +538,7 @@ namespace OZZ::rendering::vk {
 
         const auto commandBuffer = *commandBufferResourcePool.Get(frameContext.GetCommandBuffer());
 
-        const auto buffer = (*buffers)[currentFrame];
+        const auto buffer = (*buffers)[GetFrameNumberFromFrameContext(frameContext)];
 
         if (has(buffer.Usage, BufferUsage::VertexBuffer)) {
             vkCmdBindVertexBuffers2(commandBuffer, 0, 1, &buffer.Buffer, (VkDeviceSize[]) {0}, nullptr, nullptr);
