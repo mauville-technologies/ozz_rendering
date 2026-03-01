@@ -184,7 +184,7 @@ int main() {
                                 .data(),
                             sizeof(Vertex) * 3,
                             0);
-
+    spdlog::info("Updated vertex buffer with triangle vertices");
     rhiDevice->UpdateBuffer(indexBuffer,
                             std::array {
                                 OZZ::rendering::IndexBufferElementType {0},
@@ -194,7 +194,7 @@ int main() {
                                 .data(),
                             OZZ::rendering::IndexBufferElementSize * 3,
                             0);
-
+    spdlog::info("Updated index buffer with triangle indices");
     const auto attributeDescriptions = Vertex::GetAttributeDescriptions();
     const auto bindingDescriptions = Vertex::GetBindingDescription();
 
@@ -202,8 +202,8 @@ int main() {
         glfwPollEvents();
         auto context = rhiDevice->BeginFrame();
         renderPassDescriptor.ColorAttachments[0].Texture = context.GetBackbuffer();
-        rhiDevice->BeginRenderPass(context.GetCommandBuffer(), renderPassDescriptor);
-        rhiDevice->SetGraphicsState(context.GetCommandBuffer(),
+        rhiDevice->BeginRenderPass(context, renderPassDescriptor);
+        rhiDevice->SetGraphicsState(context,
                                     {
                                         .ColorBlend = {{
                                             .BlendEnable = false,
@@ -217,7 +217,7 @@ int main() {
                                                 .AttributeCount = attributeDescriptions.size(),
                                             },
                                     });
-        rhiDevice->SetViewport(context.GetCommandBuffer(),
+        rhiDevice->SetViewport(context,
                                {
                                    .X = 0,
                                    .Y = 0,
@@ -226,21 +226,21 @@ int main() {
                                    .MinDepth = 0.f,
                                    .MaxDepth = 1.f,
                                });
-        rhiDevice->SetScissor(context.GetCommandBuffer(),
+        rhiDevice->SetScissor(context,
                               {
                                   .X = 0,
                                   .Y = 0,
                                   .Width = WINDOW_WIDTH,
                                   .Height = WINDOW_HEIGHT,
                               });
-        rhiDevice->BindShader(context.GetCommandBuffer(), shader);
+        rhiDevice->BindShader(context, shader);
 
-        rhiDevice->BindBuffer(context.GetCommandBuffer(), vertexBuffer);
-        rhiDevice->BindBuffer(context.GetCommandBuffer(), indexBuffer);
+        rhiDevice->BindBuffer(context, vertexBuffer);
+        rhiDevice->BindBuffer(context, indexBuffer);
         // Bind material
-        rhiDevice->DrawIndexed(context.GetCommandBuffer(), 3, 1, 0, 0, 0);
+        rhiDevice->DrawIndexed(context, 3, 1, 0, 0, 0);
 
-        rhiDevice->EndRenderPass(context.GetCommandBuffer());
+        rhiDevice->EndRenderPass(context);
         rhiDevice->SubmitAndPresentFrame(std::move(context));
     }
 

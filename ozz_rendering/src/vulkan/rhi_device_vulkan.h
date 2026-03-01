@@ -30,28 +30,43 @@ namespace OZZ::rendering::vk {
         ~RHIDeviceVulkan() override;
 
         // RHI Commands
-        FrameContext BeginFrame() override;
-        void SubmitAndPresentFrame(FrameContext) override;
+        // We give them a frame context
+        RHIFrameContext BeginFrame() override;
+        // and then take it back
+        void SubmitAndPresentFrame(RHIFrameContext&& frameContext) override;
 
-        void BeginRenderPass(const RHICommandBufferHandle&, const RenderPassDescriptor&) override;
-        void EndRenderPass(const RHICommandBufferHandle&) override;
+        void BeginRenderPass(const RHIFrameContext& frameContext, const RenderPassDescriptor&) override;
+        void EndRenderPass(const RHIFrameContext& frameContext) override;
 
         // Barriers
-        void TextureResourceBarrier(const RHICommandBufferHandle&, const TextureBarrierDescriptor&) override;
-        void BufferMemoryBarrier(const RHICommandBufferHandle&, const BufferBarrierDescriptor&) override;
+        void TextureResourceBarrier(const RHIFrameContext& frameContext, const TextureBarrierDescriptor&) override;
+        void BufferMemoryBarrier(const RHIFrameContext& frameContext, const BufferBarrierDescriptor&) override;
 
-        void SetViewport(const RHICommandBufferHandle&, const Viewport&) override;
-        void SetScissor(const RHICommandBufferHandle&, const Scissor&) override;
+        void SetViewport(const RHIFrameContext& frameContext, const Viewport&) override;
+        void SetScissor(const RHIFrameContext& frameContext, const Scissor&) override;
 
-        void SetGraphicsState(const RHICommandBufferHandle&, const GraphicsStateDescriptor&) override;
+        void SetGraphicsState(const RHIFrameContext& frameContext, const GraphicsStateDescriptor&) override;
 
-        void Draw(const RHICommandBufferHandle&,
+        void BindShader(const RHIFrameContext&, const RHIShaderHandle&) override;
+
+        void BindBuffer(const RHIFrameContext& frameContext, RHIBufferHandle& bufferHandle) override;
+        void BindUniformBuffer(const RHIFrameContext& frameContext,
+                               const RHIBufferHandle& bufferHandle,
+                               uint32_t set,
+                               uint32_t binding) override;
+        void SetPushConstants(const RHIFrameContext& frameContext,
+                              std::set<ShaderStage> stageFlags,
+                              uint32_t offset,
+                              uint32_t size,
+                              const void* data) override;
+
+        void Draw(const RHIFrameContext& frameContext,
                   uint32_t vertexCount,
                   uint32_t instanceCount,
                   uint32_t firstVertex,
                   uint32_t firstInstance) override;
 
-        void DrawIndexed(const RHICommandBufferHandle&,
+        void DrawIndexed(const RHIFrameContext& frameContext,
                          uint32_t indexCount,
                          uint32_t instanceCount,
                          uint32_t firstIndex,
@@ -64,21 +79,9 @@ namespace OZZ::rendering::vk {
         RHIShaderHandle CreateShader(ShaderFileParams&& shaderFiles) override;
         RHIShaderHandle CreateShader(ShaderSourceParams&& shaderSources) override;
         void FreeShader(const RHIShaderHandle&) override;
-        void BindShader(const RHICommandBufferHandle&, const RHIShaderHandle&) override;
 
         RHIBufferHandle CreateBuffer(BufferDescriptor&& bufferDescriptor) override;
         void UpdateBuffer(const RHIBufferHandle&, const void* data, size_t size, size_t offset) override;
-
-        void BindBuffer(const RHICommandBufferHandle& commandBufferHandle, RHIBufferHandle& bufferHandle) override;
-        void BindUniformBuffer(const RHICommandBufferHandle& commandBufferHandle,
-                               const RHIBufferHandle& bufferHandle,
-                               uint32_t set,
-                               uint32_t binding) override;
-        void SetPushConstants(const RHICommandBufferHandle& commandBufferHandle,
-                              std::set<ShaderStage> stageFlags,
-                              uint32_t offset,
-                              uint32_t size,
-                              const void* data) override;
 
     private:
         bool initialize();
@@ -134,6 +137,6 @@ namespace OZZ::rendering::vk {
         ResourcePool<TextureTag, RHITextureVulkan> texturePool;
         ResourcePool<CommandBufferTag, VkCommandBuffer> commandBufferResourcePool;
         ResourcePool<ShaderTag, RHIShaderVulkan> shaderResourcePool;
-        ResourcePool<BufferTag, RHIBufferVulkan> bufferResourcePool;
+        ResourcePool<BufferTag, std::array<RHIBufferVulkan, MaxFramesInFlight>> bufferResourcePool;
     };
 } // namespace OZZ::rendering::vk

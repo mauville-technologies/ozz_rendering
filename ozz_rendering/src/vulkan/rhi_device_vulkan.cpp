@@ -59,8 +59,12 @@ namespace OZZ::rendering::vk {
         , shaderResourcePool([this](RHIShaderVulkan& shader) {
             shader.Destroy(device);
         })
-        , bufferResourcePool([this](const RHIBufferVulkan& buffer) {
-            vmaDestroyBuffer(vmaAllocator, buffer.Buffer, buffer.Allocation);
+        , bufferResourcePool([this](const std::array<RHIBufferVulkan, MaxFramesInFlight>& buffer) {
+            for (const auto buffer : buffer) {
+                if (buffer.Buffer != VK_NULL_HANDLE) {
+                    vmaDestroyBuffer(vmaAllocator, buffer.Buffer, buffer.Allocation);
+                }
+            }
         }) {
 
         auto result = volkInitialize();
@@ -159,12 +163,12 @@ namespace OZZ::rendering::vk {
         spdlog::info("Tore down Vulkan RHI device");
     }
 
-    FrameContext RHIDeviceVulkan::BeginFrame() {
+    RHIFrameContext RHIDeviceVulkan::BeginFrame() {
         const auto& submissionContext = submissionContexts[currentFrame];
         if (const auto fenceResult = vkWaitForFences(device, 1, &submissionContext.InFlightFence, VK_TRUE, UINT64_MAX);
             fenceResult != VK_SUCCESS) {
             spdlog::error("Failed to wait for fence in BeginFrame. Error: {}", static_cast<int>(fenceResult));
-            return FrameContext::Null();
+            return RHIFrameContext::Null();
         }
 
         vkResetFences(device, 1, &submissionContext.InFlightFence);
@@ -179,7 +183,7 @@ namespace OZZ::rendering::vk {
                                                       &imageIndex);
             result != VK_SUCCESS) {
             spdlog::error("Failed to acquire next image in BeginFrame. Error: {}", static_cast<int>(result));
-            return FrameContext::Null();
+            return RHIFrameContext::Null();
         }
 
         const auto commandBuffer = commandBufferResourcePool.Get(submissionContext.CommandBuffer);
@@ -193,10 +197,14 @@ namespace OZZ::rendering::vk {
 
         if (const auto result = vkBeginCommandBuffer(*commandBuffer, &VkCommandBufferBeginInfo); result != VK_SUCCESS) {
             spdlog::error("Failed to begin command buffer in BeginFrame. Error: {}", static_cast<int>(result));
-            return FrameContext::Null();
+            return RHIFrameContext::Null();
         }
 
-        TextureResourceBarrier(submissionContext.CommandBuffer,
+        auto frameContext = BuildFrameContext(submissionContext.CommandBuffer,
+                                              swapchainTextureHandles[imageIndex],
+                                              imageIndex,
+                                              currentFrame);
+        TextureResourceBarrier(frameContext,
                                TextureBarrierDescriptor {
                                    .Texture = swapchainTextureHandles[imageIndex],
                                    .OldLayout = TextureLayout::Undefined,
@@ -207,17 +215,14 @@ namespace OZZ::rendering::vk {
                                    .DstAccess = Access::ColorAttachmentWrite,
                                });
 
-        return BuildFrameContext(submissionContext.CommandBuffer,
-                                 swapchainTextureHandles[imageIndex],
-                                 imageIndex,
-                                 currentFrame);
+        return std::move(frameContext);
     }
 
-    void RHIDeviceVulkan::SubmitAndPresentFrame(FrameContext context) {
+    void RHIDeviceVulkan::SubmitAndPresentFrame(RHIFrameContext&& frameContext) {
         // Prepare swapchain image for presentation
-        const auto imageIndex = GetImageIndexFromFrameContext(context);
+        const auto imageIndex = GetImageIndexFromFrameContext(frameContext);
 
-        TextureResourceBarrier(context.GetCommandBuffer(),
+        TextureResourceBarrier(frameContext,
                                TextureBarrierDescriptor {
                                    .Texture = swapchainTextureHandles[imageIndex],
                                    .OldLayout = TextureLayout::ColorAttachment,
@@ -228,13 +233,13 @@ namespace OZZ::rendering::vk {
                                    .DstAccess = Access::None,
                                });
 
-        auto commandBuffer = commandBufferResourcePool.Get(context.GetCommandBuffer());
+        auto commandBuffer = commandBufferResourcePool.Get(frameContext.GetCommandBuffer());
         if (const auto result = vkEndCommandBuffer(*commandBuffer); result != VK_SUCCESS) {
             spdlog::error("Failed to end command buffer in SubmitFrame. Error: {}", static_cast<int>(result));
             return;
         }
 
-        auto& submissionContext = submissionContexts[GetFrameNumberFromFrameContext(context)];
+        auto& submissionContext = submissionContexts[GetFrameNumberFromFrameContext(frameContext)];
         VkPipelineStageFlags waitFlags {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
         VkSubmitInfo submitInfo {
             .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
@@ -275,7 +280,7 @@ namespace OZZ::rendering::vk {
         currentFrame = (currentFrame + 1) % framesInFlight;
     }
 
-    void RHIDeviceVulkan::BeginRenderPass(const RHICommandBufferHandle& commandBufferHandle,
+    void RHIDeviceVulkan::BeginRenderPass(const RHIFrameContext& frameContext,
                                           const RenderPassDescriptor& renderPassDescriptor) {
         std::vector<VkRenderingAttachmentInfo> colorAttachments;
         bool bHasDepthStencilAttachment = false;
@@ -355,18 +360,18 @@ namespace OZZ::rendering::vk {
             .pStencilAttachment = bHasDepthStencilAttachment ? &depthStencilAttachment : nullptr,
         };
 
-        const auto commandBuffer = *commandBufferResourcePool.Get(commandBufferHandle);
+        const auto commandBuffer = *commandBufferResourcePool.Get(frameContext.GetCommandBuffer());
         vkCmdBeginRendering(commandBuffer, &renderingInfo);
     }
 
-    void RHIDeviceVulkan::EndRenderPass(const RHICommandBufferHandle& commandBufferHandle) {
-        const auto commandBuffer = *commandBufferResourcePool.Get(commandBufferHandle);
+    void RHIDeviceVulkan::EndRenderPass(const RHIFrameContext& frameContext) {
+        const auto commandBuffer = *commandBufferResourcePool.Get(frameContext.GetCommandBuffer());
         vkCmdEndRendering(commandBuffer);
     }
 
-    void RHIDeviceVulkan::TextureResourceBarrier(const RHICommandBufferHandle& cbHandle,
+    void RHIDeviceVulkan::TextureResourceBarrier(const RHIFrameContext& frameContext,
                                                  const TextureBarrierDescriptor& barrierDescriptor) {
-        const auto commandBuffer = *commandBufferResourcePool.Get(cbHandle);
+        const auto commandBuffer = *commandBufferResourcePool.Get(frameContext.GetCommandBuffer());
 
         VkImageMemoryBarrier2 imageMemoryBarrier {
             .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
@@ -408,12 +413,12 @@ namespace OZZ::rendering::vk {
         vkCmdPipelineBarrier2(commandBuffer, &barrierDependency);
     }
 
-    void RHIDeviceVulkan::BufferMemoryBarrier(const RHICommandBufferHandle&, const BufferBarrierDescriptor&) {
+    void RHIDeviceVulkan::BufferMemoryBarrier(const RHIFrameContext&, const BufferBarrierDescriptor&) {
         assert(false && "Buffer memory barriers not implemented!!");
     }
 
-    void RHIDeviceVulkan::SetViewport(const RHICommandBufferHandle& commandBufferHandle, const Viewport& viewport) {
-        const auto* commandBuffer = commandBufferResourcePool.Get(commandBufferHandle);
+    void RHIDeviceVulkan::SetViewport(const RHIFrameContext& frameContext, const Viewport& viewport) {
+        const auto* commandBuffer = commandBufferResourcePool.Get(frameContext.GetCommandBuffer());
         VkViewport vkViewport {
             .x = viewport.X,
             .y = viewport.Y,
@@ -425,8 +430,8 @@ namespace OZZ::rendering::vk {
         vkCmdSetViewportWithCount(*commandBuffer, 1, &vkViewport);
     }
 
-    void RHIDeviceVulkan::SetScissor(const RHICommandBufferHandle& commandBufferHandle, const Scissor& scissor) {
-        const auto* commandBuffer = commandBufferResourcePool.Get(commandBufferHandle);
+    void RHIDeviceVulkan::SetScissor(const RHIFrameContext& frameContext, const Scissor& scissor) {
+        const auto* commandBuffer = commandBufferResourcePool.Get(frameContext.GetCommandBuffer());
         VkRect2D vkScissor {
             .offset =
                 {
@@ -442,9 +447,9 @@ namespace OZZ::rendering::vk {
         vkCmdSetScissorWithCount(*commandBuffer, 1, &vkScissor);
     }
 
-    void RHIDeviceVulkan::SetGraphicsState(const RHICommandBufferHandle& commandBufferHandle,
+    void RHIDeviceVulkan::SetGraphicsState(const RHIFrameContext& frameContext,
                                            const GraphicsStateDescriptor& graphicsStateDescriptor) {
-        const VkCommandBuffer cmd = *commandBufferResourcePool.Get(commandBufferHandle);
+        const VkCommandBuffer cmd = *commandBufferResourcePool.Get(frameContext.GetCommandBuffer());
 
         // Input Assembly
         vkCmdSetPrimitiveTopology(cmd,
@@ -516,22 +521,63 @@ namespace OZZ::rendering::vk {
                                attributes);
     }
 
-    void RHIDeviceVulkan::Draw(const RHICommandBufferHandle& commandBufferHandle,
+    void RHIDeviceVulkan::BindShader(const RHIFrameContext& frameContext, const RHIShaderHandle& shaderHandle) {
+        if (const auto* shader = shaderResourcePool.Get(shaderHandle)) {
+            const auto commandBuffer = *commandBufferResourcePool.Get(frameContext.GetCommandBuffer());
+            shader->Bind(device, commandBuffer);
+        }
+    }
+
+    void RHIDeviceVulkan::BindBuffer(const RHIFrameContext& frameContext, RHIBufferHandle& bufferHandle) {
+        const auto buffers = bufferResourcePool.Get(bufferHandle);
+        if (!buffers) {
+            spdlog::error("Failed to bind buffer. Buffer handle is invalid.");
+            return;
+        }
+
+        const auto commandBuffer = *commandBufferResourcePool.Get(frameContext.GetCommandBuffer());
+
+        const auto buffer = (*buffers)[currentFrame];
+
+        if (has(buffer.Usage, BufferUsage::VertexBuffer)) {
+            vkCmdBindVertexBuffers2(commandBuffer, 0, 1, &buffer.Buffer, (VkDeviceSize[]) {0}, nullptr, nullptr);
+            return;
+        }
+
+        if (has(buffer.Usage, BufferUsage::IndexBuffer)) {
+            vkCmdBindIndexBuffer(commandBuffer, buffer.Buffer, 0, VK_INDEX_TYPE_UINT32);
+            return;
+        }
+        assert(false && "Buffer type not implemented.");
+    }
+
+    void RHIDeviceVulkan::BindUniformBuffer(const RHIFrameContext& frameContext,
+                                            const RHIBufferHandle& bufferHandle,
+                                            uint32_t set,
+                                            uint32_t binding) {}
+
+    void RHIDeviceVulkan::SetPushConstants(const RHIFrameContext& frameContext,
+                                           std::set<ShaderStage> stageFlags,
+                                           uint32_t offset,
+                                           uint32_t size,
+                                           const void* data) {}
+
+    void RHIDeviceVulkan::Draw(const RHIFrameContext& frameContext,
                                const uint32_t vertexCount,
                                const uint32_t instanceCount,
                                const uint32_t firstVertex,
                                const uint32_t firstInstance) {
-        const auto* commandBuffer = commandBufferResourcePool.Get(commandBufferHandle);
+        const auto* commandBuffer = commandBufferResourcePool.Get(frameContext.GetCommandBuffer());
         vkCmdDraw(*commandBuffer, vertexCount, instanceCount, firstVertex, firstInstance);
     }
 
-    void RHIDeviceVulkan::DrawIndexed(const RHICommandBufferHandle& commandBufferHandle,
+    void RHIDeviceVulkan::DrawIndexed(const RHIFrameContext& frameContext,
                                       uint32_t indexCount,
                                       uint32_t instanceCount,
                                       uint32_t firstIndex,
                                       int32_t vertexOffset,
                                       uint32_t firstInstance) {
-        const auto* commandBuffer = commandBufferResourcePool.Get(commandBufferHandle);
+        const auto* commandBuffer = commandBufferResourcePool.Get(frameContext.GetCommandBuffer());
         vkCmdDrawIndexed(*commandBuffer, indexCount, instanceCount, firstIndex, vertexOffset, firstInstance);
     }
 
@@ -563,120 +609,81 @@ namespace OZZ::rendering::vk {
         shaderResourcePool.Free(shaderHandle);
     }
 
-    void RHIDeviceVulkan::BindShader(const RHICommandBufferHandle& commandBufferHandle,
-                                     const RHIShaderHandle& shaderHandle) {
-        if (const auto* shader = shaderResourcePool.Get(shaderHandle)) {
-            const auto commandBuffer = *commandBufferResourcePool.Get(commandBufferHandle);
-            shader->Bind(device, commandBuffer);
-        }
-    }
-
     RHIBufferHandle RHIDeviceVulkan::CreateBuffer(BufferDescriptor&& bufferDescriptor) {
-        VkBufferCreateInfo bufferCreateInfo {
-            .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-            .pNext = nullptr,
-            .flags = 0,
-            .size = bufferDescriptor.Size,
-            .usage = ConvertBufferUsageToVulkan(bufferDescriptor.Usage),
-            .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
-            .queueFamilyIndexCount = 0,
-            .pQueueFamilyIndices = nullptr,
-        };
+        std::array<RHIBufferVulkan, MaxFramesInFlight> buffers;
 
-        VmaAllocationCreateInfo allocationCreateInfo {
-            .flags = VMA_ALLOCATION_CREATE_MAPPED_BIT,
-            .usage = ConvertMemoryAccessToVulkan(bufferDescriptor.Access),
-            .requiredFlags = 0,
-            .preferredFlags = 0,
-            .memoryTypeBits = 0,
-            .pool = VK_NULL_HANDLE,
-            .pUserData = nullptr,
-        };
+        for (auto& buffer : buffers) {
+            VkBufferCreateInfo bufferCreateInfo {
+                .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+                .pNext = nullptr,
+                .flags = 0,
+                .size = bufferDescriptor.Size,
+                .usage = ConvertBufferUsageToVulkan(bufferDescriptor.Usage),
+                .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+                .queueFamilyIndexCount = 0,
+                .pQueueFamilyIndices = nullptr,
+            };
 
-        VkBuffer buffer;
-        VmaAllocation allocation;
-        VmaAllocationInfo allocationInfo;
-        if (const auto result = vmaCreateBuffer(vmaAllocator,
-                                                &bufferCreateInfo,
-                                                &allocationCreateInfo,
-                                                &buffer,
-                                                &allocation,
-                                                &allocationInfo);
-            result != VK_SUCCESS) {
-            spdlog::error("Failed to create buffer. Error: {}", static_cast<int>(result));
-            return RHIBufferHandle::Null();
+            VmaAllocationCreateInfo allocationCreateInfo {
+                .flags = VMA_ALLOCATION_CREATE_MAPPED_BIT,
+                .usage = ConvertMemoryAccessToVulkan(bufferDescriptor.Access),
+                .requiredFlags = 0,
+                .preferredFlags = 0,
+                .memoryTypeBits = 0,
+                .pool = VK_NULL_HANDLE,
+                .pUserData = nullptr,
+            };
+
+            if (const auto result = vmaCreateBuffer(vmaAllocator,
+                                                    &bufferCreateInfo,
+                                                    &allocationCreateInfo,
+                                                    &buffer.Buffer,
+                                                    &buffer.Allocation,
+                                                    &buffer.AllocationInfo);
+                result != VK_SUCCESS) {
+                spdlog::error("Failed to create buffer. Error: {}", static_cast<int>(result));
+                return RHIBufferHandle::Null();
+            }
+
+            buffer.Access = bufferDescriptor.Access;
+            buffer.Usage = bufferDescriptor.Usage;
         }
 
-        const auto handle = bufferResourcePool.Allocate({
-            .Buffer = buffer,
-            .Allocation = allocation,
-            .AllocationInfo = allocationInfo,
-            .Usage = bufferDescriptor.Usage,
-            .Access = bufferDescriptor.Access,
-        });
+        const auto handle = bufferResourcePool.Allocate(std::move(buffers));
 
         return handle;
     }
 
     void
     RHIDeviceVulkan::UpdateBuffer(const RHIBufferHandle& bufferHandle, const void* data, size_t size, size_t offset) {
-        const auto buffer = bufferResourcePool.Get(bufferHandle);
-        if (!buffer) {
+        const auto buffers = bufferResourcePool.Get(bufferHandle);
+        if (!buffers) {
             spdlog::error("Failed to update buffer. Buffer handle is invalid.");
             return;
         }
 
-        // ensure usage is CPU accessible
-        if (buffer->Access == BufferMemoryAccess::GpuOnly) {
-            spdlog::error("Failed to update buffer. Buffer is not CPU accessible.");
-            return;
-        }
+        for (const auto& buffer : *buffers) {
+            // ensure usage is CPU accessible
+            if (buffer.Access == BufferMemoryAccess::GpuOnly) {
+                spdlog::error("Failed to update buffer. Buffer is not CPU accessible.");
+                return;
+            }
 
-        // make sure offset + size does not exceed buffer size
-        if (offset + size > buffer->AllocationInfo.size) {
-            spdlog::error("Failed to update buffer. Data size exceeds buffer size.");
-            return;
-        }
+            // make sure offset + size does not exceed buffer size
+            if (offset + size > buffer.AllocationInfo.size) {
+                spdlog::error("Failed to update buffer. Data size exceeds buffer size.");
+                return;
+            }
 
-        void* mappedData = buffer->AllocationInfo.pMappedData;
-        if (!mappedData) {
-            spdlog::error("Failed to update buffer. Buffer memory is not mapped.");
-            return;
+            void* mappedData = buffer.AllocationInfo.pMappedData;
+            if (!mappedData) {
+                spdlog::error("Failed to update buffer. Buffer memory is not mapped.");
+                return;
+            }
+            std::memcpy(static_cast<uint8_t*>(mappedData) + offset, data, size);
+            vmaFlushAllocation(vmaAllocator, buffer.Allocation, offset, size);
         }
-        std::memcpy(static_cast<uint8_t*>(mappedData) + offset, data, size);
-        vmaFlushAllocation(vmaAllocator, buffer->Allocation, offset, size);
     }
-
-    void RHIDeviceVulkan::BindBuffer(const RHICommandBufferHandle& commandBufferHandle, RHIBufferHandle& bufferHandle) {
-        const auto buffer = bufferResourcePool.Get(bufferHandle);
-        if (!buffer) {
-            spdlog::error("Failed to bind buffer. Buffer handle is invalid.");
-            return;
-        }
-
-        const auto commandBuffer = *commandBufferResourcePool.Get(commandBufferHandle);
-        if (has(buffer->Usage, BufferUsage::VertexBuffer)) {
-            vkCmdBindVertexBuffers2(commandBuffer, 0, 1, &buffer->Buffer, (VkDeviceSize[]) {0}, nullptr, nullptr);
-            return;
-        }
-
-        if (has(buffer->Usage, BufferUsage::IndexBuffer)) {
-            vkCmdBindIndexBuffer(commandBuffer, buffer->Buffer, 0, VK_INDEX_TYPE_UINT32);
-            return;
-        }
-        assert(false && "Buffer type not implemented.");
-    }
-
-    void RHIDeviceVulkan::BindUniformBuffer(const RHICommandBufferHandle& commandBufferHandle,
-                                            const RHIBufferHandle& bufferHandle,
-                                            uint32_t set,
-                                            uint32_t binding) {}
-
-    void RHIDeviceVulkan::SetPushConstants(const RHICommandBufferHandle& commandBufferHandle,
-                                           std::set<ShaderStage> stageFlags,
-                                           uint32_t offset,
-                                           uint32_t size,
-                                           const void* data) {}
 
     bool RHIDeviceVulkan::initialize() {
         spdlog::info("Initializing Vulkan RHI device");

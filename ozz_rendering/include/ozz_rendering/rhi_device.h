@@ -47,27 +47,30 @@ namespace OZZ::rendering {
         PlatformContext Context {};
     };
 
-    class FrameContext {
+    class RHIFrameContext {
     public:
         // Only thing app-level renderables can do:
-        RHICommandBufferHandle GetCommandBuffer() { return commandBuffer; }
+        [[nodiscard]] RHICommandBufferHandle GetCommandBuffer() const { return commandBuffer; }
 
-        RHITextureHandle GetBackbuffer() { return backbuffer; }
+        [[nodiscard]] RHITextureHandle GetBackbuffer() const { return backbuffer; }
 
         // Non-copyable - one frame in flight at a time
-        FrameContext(const FrameContext&) = delete;
-        FrameContext& operator=(const FrameContext&) = delete;
-        FrameContext(FrameContext&&) = default;
+        RHIFrameContext(const RHIFrameContext&) = delete;
+        RHIFrameContext& operator=(const RHIFrameContext&) = delete;
+        RHIFrameContext(RHIFrameContext&&) = default;
 
         [[nodiscard]] bool IsValid() const { return commandBuffer.IsValid() && backbuffer.IsValid(); }
 
-        static FrameContext Null() { return {RHICommandBufferHandle::Null(), RHITextureHandle::Null(), 0, 0}; }
+        static RHIFrameContext Null() { return {RHICommandBufferHandle::Null(), RHITextureHandle::Null(), 0, 0}; }
 
     private:
         // Only RHIDevice can construct this
         friend class RHIDevice;
 
-        FrameContext(RHICommandBufferHandle cmd, RHITextureHandle backbuffer, uint32_t imageIndex, uint32_t frameIndex)
+        RHIFrameContext(RHICommandBufferHandle cmd,
+                        RHITextureHandle backbuffer,
+                        uint32_t imageIndex,
+                        uint32_t frameIndex)
             : commandBuffer(cmd)
             , backbuffer(backbuffer)
             , imageIndex(imageIndex)    // hidden from app
@@ -86,36 +89,36 @@ namespace OZZ::rendering {
         RHIDevice() = delete;
 
         // Frame
-        virtual FrameContext BeginFrame() = 0;
-        virtual void SubmitAndPresentFrame(FrameContext frameContext) = 0;
+        virtual RHIFrameContext BeginFrame() = 0;
+        virtual void SubmitAndPresentFrame(RHIFrameContext&& frameContext) = 0;
 
         // Render pass
-        virtual void BeginRenderPass(const RHICommandBufferHandle& commandBufferHandle,
+        virtual void BeginRenderPass(const RHIFrameContext& commandBufferHandle,
                                      const RenderPassDescriptor& renderPassDescriptor) = 0;
-        virtual void EndRenderPass(const RHICommandBufferHandle& commandBufferHandle) = 0;
+        virtual void EndRenderPass(const RHIFrameContext& commandBufferHandle) = 0;
 
         // Resource barriers
-        virtual void TextureResourceBarrier(const RHICommandBufferHandle& commandBufferHandle,
+        virtual void TextureResourceBarrier(const RHIFrameContext& commandBufferHandle,
                                             const TextureBarrierDescriptor& textureBarrierDescriptor) = 0;
-        virtual void BufferMemoryBarrier(const RHICommandBufferHandle& commandBufferHandle,
+        virtual void BufferMemoryBarrier(const RHIFrameContext& commandBufferHandle,
                                          const BufferBarrierDescriptor& bufferBarrierDescriptor) = 0;
 
         // Viewport / scissor
-        virtual void SetViewport(const RHICommandBufferHandle& commandBufferHandle, const Viewport& viewport) = 0;
-        virtual void SetScissor(const RHICommandBufferHandle& commandBufferHandle, const Scissor& scissor) = 0;
+        virtual void SetViewport(const RHIFrameContext& commandBufferHandle, const Viewport& viewport) = 0;
+        virtual void SetScissor(const RHIFrameContext& commandBufferHandle, const Scissor& scissor) = 0;
 
         // Pipeline state
-        virtual void SetGraphicsState(const RHICommandBufferHandle& commandBufferHandle,
+        virtual void SetGraphicsState(const RHIFrameContext& commandBufferHandle,
                                       const GraphicsStateDescriptor& graphicsStateDescriptor) = 0;
 
         // Draw
-        virtual void Draw(const RHICommandBufferHandle&,
+        virtual void Draw(const RHIFrameContext&,
                           uint32_t vertexCount,
                           uint32_t instanceCount,
                           uint32_t firstVertex,
                           uint32_t firstInstance) = 0;
 
-        virtual void DrawIndexed(const RHICommandBufferHandle&,
+        virtual void DrawIndexed(const RHIFrameContext&,
                                  uint32_t indexCount,
                                  uint32_t instanceCount,
                                  uint32_t firstIndex,
@@ -128,19 +131,19 @@ namespace OZZ::rendering {
         virtual RHIShaderHandle CreateShader(ShaderFileParams&& fileParams) = 0;
         virtual RHIShaderHandle CreateShader(ShaderSourceParams&& sourceParams) = 0;
         virtual void FreeShader(const RHIShaderHandle& shaderHandle) = 0;
-        virtual void BindShader(const RHICommandBufferHandle& commandBufferHandle,
-                                const RHIShaderHandle& shaderHandle) = 0;
+        virtual void BindShader(const RHIFrameContext& commandBufferHandle, const RHIShaderHandle& shaderHandle) = 0;
 
         virtual RHIBufferHandle CreateBuffer(BufferDescriptor&& bufferDescriptor) = 0;
         virtual void UpdateBuffer(const RHIBufferHandle&, const void* data, size_t size, size_t offset) = 0;
-        virtual void BindBuffer(const RHICommandBufferHandle& commandBufferHandle, RHIBufferHandle& bufferHandle) = 0;
 
-        virtual void BindUniformBuffer(const RHICommandBufferHandle& commandBufferHandle,
+        virtual void BindBuffer(const RHIFrameContext& commandBufferHandle, RHIBufferHandle& bufferHandle) = 0;
+
+        virtual void BindUniformBuffer(const RHIFrameContext& commandBufferHandle,
                                        const RHIBufferHandle& bufferHandle,
                                        uint32_t set,
                                        uint32_t binding) = 0;
 
-        virtual void SetPushConstants(const RHICommandBufferHandle& commandBufferHandle,
+        virtual void SetPushConstants(const RHIFrameContext& commandBufferHandle,
                                       std::set<ShaderStage> stageFlags,
                                       uint32_t offset,
                                       uint32_t size,
@@ -151,16 +154,16 @@ namespace OZZ::rendering {
         // initialization, but allows the base class to be agnostic of the platform context details
         explicit RHIDevice(const PlatformContext&) {};
 
-        static FrameContext BuildFrameContext(RHICommandBufferHandle cmd,
-                                              RHITextureHandle backbuffer,
-                                              uint32_t imageIndex,
-                                              uint32_t frameIndex) {
+        static RHIFrameContext BuildFrameContext(RHICommandBufferHandle cmd,
+                                                 RHITextureHandle backbuffer,
+                                                 uint32_t imageIndex,
+                                                 uint32_t frameIndex) {
             return {cmd, backbuffer, imageIndex, frameIndex};
         }
 
-        static uint32_t GetFrameNumberFromFrameContext(const FrameContext& context) { return context.frameIndex; }
+        static uint32_t GetFrameNumberFromFrameContext(const RHIFrameContext& context) { return context.frameIndex; }
 
-        static uint32_t GetImageIndexFromFrameContext(const FrameContext& context) { return context.imageIndex; }
+        static uint32_t GetImageIndexFromFrameContext(const RHIFrameContext& context) { return context.imageIndex; }
     };
 
     std::unique_ptr<RHIDevice> CreateRHIDevice(const RHIInitParams&);
