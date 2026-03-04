@@ -4,10 +4,23 @@
 
 #pragma once
 
-#include "ozz_rendering/rhi_buffer.h"
+#include <vma/vk_mem_alloc.h>
 #include <volk.h>
 
+#include <cstdint>
+#include <vector>
+
+#include "ozz_rendering/rhi_barrier.h"
+#include "ozz_rendering/rhi_buffer.h"
+#include "spdlog/spdlog.h"
+
 namespace OZZ::rendering::vk {
+    struct CompiledShaderProgram {
+        std::vector<uint32_t> VertexSpirv;
+        std::vector<uint32_t> GeometrySpirv;
+        std::vector<uint32_t> FragmentSpirv;
+    };
+
     inline VkPipelineStageFlags2 ConvertPipelineStageToVulkan(const PipelineStage stage) {
         switch (stage) {
             case PipelineStage::None:
@@ -253,4 +266,32 @@ namespace OZZ::rendering::vk {
         }
         return VMA_MEMORY_USAGE_GPU_ONLY;
     }
+
+    inline VkDescriptorType ConvertDescriptorTypeToVulkan(const DescriptorType type) {
+        switch (type) {
+            case DescriptorType::UniformBuffer:
+                return VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            case DescriptorType::StorageBuffer:
+                return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            case DescriptorType::CombinedImageSampler:
+                return VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            case DescriptorType::SampledImage:
+            case DescriptorType::Sampler:
+            case DescriptorType::StorageImage:
+                spdlog::error("Descriptor type {} not implemented yet", static_cast<int>(type));
+        }
+        return VK_DESCRIPTOR_TYPE_MAX_ENUM;
+    }
+
+    inline VkShaderStageFlags ConvertShaderStageFlagsToVulkan(const ShaderStageFlags flags) {
+        VkShaderStageFlags result = 0;
+        if (has(flags, ShaderStageFlags::Vertex))
+            result |= VK_SHADER_STAGE_VERTEX_BIT;
+        if (has(flags, ShaderStageFlags::Geometry))
+            result |= VK_SHADER_STAGE_GEOMETRY_BIT;
+        if (has(flags, ShaderStageFlags::Fragment))
+            result |= VK_SHADER_STAGE_FRAGMENT_BIT;
+        return result;
+    }
+
 } // namespace OZZ::rendering::vk

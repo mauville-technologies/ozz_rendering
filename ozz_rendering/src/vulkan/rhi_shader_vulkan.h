@@ -4,29 +4,29 @@
 
 #pragma once
 
+#include "ozz_rendering/rhi_descriptors.h"
 #include "ozz_rendering/rhi_shader.h"
+#include "utils/rhi_vulkan_types.h"
 
 #include <filesystem>
 #include <glslang/Public/ShaderLang.h>
 #include <memory>
 
+#include <spirv_cross/spirv_reflect.hpp>
 #include <volk.h>
 
 namespace OZZ::rendering::vk {
-    struct CompiledShaderProgram {
-        std::vector<uint32_t> VertexSpirv;
-        std::vector<uint32_t> GeometrySpirv;
-        std::vector<uint32_t> FragmentSpirv;
-    };
 
-    inline EShLanguage ToGLSLANGShaderStage(const ShaderStage stage) {
+    inline EShLanguage ToGLSLANGShaderStage(const ShaderStageFlags stage) {
         switch (stage) {
-            case ShaderStage::Vertex:
+            case ShaderStageFlags::Vertex:
                 return EShLangVertex;
-            case ShaderStage::Geometry:
+            case ShaderStageFlags::Geometry:
                 return EShLangGeometry;
-            case ShaderStage::Fragment:
+            case ShaderStageFlags::Fragment:
                 return EShLangFragment;
+            default:
+                break;
         }
         return EShLangCount;
     }
@@ -41,10 +41,12 @@ namespace OZZ::rendering::vk {
 
         [[nodiscard]] bool IsValid() const { return bIsValid; }
 
+        RHIPipelineLayoutDescriptor GetPipelineLayoutDescriptor() const;
+
     private:
         bool compileSources(VkDevice device, ShaderSourceParams&& shaderSources);
         static std::optional<CompiledShaderProgram> compileProgram(const ShaderSourceParams& shaderSources);
-        static std::pair<bool, std::unique_ptr<glslang::TShader>> compileShader(ShaderStage stage,
+        static std::pair<bool, std::unique_ptr<glslang::TShader>> compileShader(ShaderStageFlags stage,
                                                                                 const std::string& glslCode);
 
     private:
@@ -52,6 +54,8 @@ namespace OZZ::rendering::vk {
         std::vector<VkShaderStageFlagBits> shaderStages {};
 
         bool bIsValid {false};
+
+        RHIPipelineLayoutDescriptor pipelineLayoutDescriptor {};
     };
 
 } // namespace OZZ::rendering::vk

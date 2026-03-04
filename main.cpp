@@ -7,6 +7,8 @@
 #include <volk.h>
 
 #include "GLFW/glfw3.h"
+#include "glm/ext/matrix_clip_space.hpp"
+#include "glm/ext/matrix_transform.hpp"
 #include "glm/vec4.hpp"
 #include "spdlog/spdlog.h"
 
@@ -14,6 +16,12 @@
 
 #include <cstdlib>
 #include <glm/glm.hpp>
+
+struct UBOObject {
+    glm::mat4 Model;
+    glm::mat4 View;
+    glm::mat4 Projection;
+};
 
 struct Vertex {
     glm::vec3 Position {0.f, 0.f, 1.f};
@@ -152,6 +160,9 @@ int main() {
         .Fragment = base / "basic.frag",
     });
 
+    // Cache the pipeline layouts
+    auto shaderLayouts = rhiDevice->CreatePipelineLayout(rhiDevice->GetShaderPipelineLayout(shader));
+
     // Let's create my vertex buffer now
     auto vertexBuffer = rhiDevice->CreateBuffer(OZZ::rendering::BufferDescriptor {
         .Size = 3 * sizeof(Vertex),
@@ -198,7 +209,32 @@ int main() {
     const auto attributeDescriptions = Vertex::GetAttributeDescriptions();
     const auto bindingDescriptions = Vertex::GetBindingDescription();
 
+    auto projection =
+        glm::ortho(-WINDOW_WIDTH / 2.f, WINDOW_WIDTH / 2.f, -WINDOW_HEIGHT / 2.f, WINDOW_HEIGHT / 2.f, 0.1f, 10.f);
+    projection[0][0] *= -1; // flip x axis to match vulkan's coordinate system
+    const auto view = glm::lookAt(glm::vec3(0.f, 0.f, 2.f), glm::vec3(0.f, 0.f, 0.f), glm::vec3(0.f, 1.f, 0.f));
+    auto model = glm::mat4(1.f);
+
+    auto uboBuffer = rhiDevice->CreateBuffer(OZZ::rendering::BufferDescriptor {
+        .Size = sizeof(projection) + sizeof(view) + sizeof(model),
+        .Usage = OZZ::rendering::BufferUsage::UniformBuffer,
+        .Access = OZZ::rendering::BufferMemoryAccess::CpuToGpu,
+    });
+
+    UBOObject uboObject {
+        .Model = model,
+        .View = view,
+        .Projection = projection,
+    };
+    rhiDevice->UpdateBuffer(uboBuffer, &uboObject, sizeof(UBOObject), 0);
+
+    if (!uboBuffer.IsValid()) {
+        spdlog::error("Failed to create uniform buffer");
+        return 1;
+    }
+
     while (!glfwWindowShouldClose(window)) {
+
         glfwPollEvents();
         auto context = rhiDevice->BeginFrame();
         renderPassDescriptor.ColorAttachments[0].Texture = context.GetBackbuffer();

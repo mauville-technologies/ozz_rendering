@@ -65,6 +65,24 @@ namespace OZZ::rendering::vk {
                     vmaDestroyBuffer(vmaAllocator, buffer.Buffer, buffer.Allocation);
                 }
             }
+        })
+        , pipelineLayoutResourcePool([this](VkPipelineLayout& layout) {
+            if (layout != VK_NULL_HANDLE) {
+                vkDestroyPipelineLayout(device, layout, nullptr);
+                layout = VK_NULL_HANDLE;
+            }
+        })
+        , descriptorSetLayoutResourcePool([this](VkDescriptorSetLayout& layout) {
+            if (layout != VK_NULL_HANDLE) {
+                vkDestroyDescriptorSetLayout(device, layout, nullptr);
+                layout = VK_NULL_HANDLE;
+            }
+        })
+        , descriptorSetResourcePool([this](VkDescriptorSet& set) {
+            if (set != VK_NULL_HANDLE && descriptorPool != VK_NULL_HANDLE) {
+                vkFreeDescriptorSets(device, descriptorPool, 1, &set);
+                set = VK_NULL_HANDLE;
+            }
         }) {
 
         auto result = volkInitialize();
@@ -83,6 +101,9 @@ namespace OZZ::rendering::vk {
         }
 
         // clear resource pools
+        descriptorSetResourcePool.Empty();
+        pipelineLayoutResourcePool.Empty();
+        descriptorSetLayoutResourcePool.Empty();
         bufferResourcePool.Empty();
         shaderResourcePool.Empty();
         texturePool.Empty();
@@ -134,6 +155,12 @@ namespace OZZ::rendering::vk {
             vmaDestroyAllocator(vmaAllocator);
             spdlog::trace("VMA allocator destroyed");
             vmaAllocator = VK_NULL_HANDLE;
+        }
+
+        if (descriptorPool != VK_NULL_HANDLE) {
+            vkDestroyDescriptorPool(device, descriptorPool, nullptr);
+            spdlog::trace("Descriptor pool destroyed");
+            descriptorPool = VK_NULL_HANDLE;
         }
 
         if (device != VK_NULL_HANDLE) {
@@ -552,16 +579,111 @@ namespace OZZ::rendering::vk {
         assert(false && "Buffer type not implemented.");
     }
 
-    void RHIDeviceVulkan::BindUniformBuffer(const RHIFrameContext& frameContext,
-                                            const RHIBufferHandle& bufferHandle,
-                                            uint32_t set,
-                                            uint32_t binding) {}
-
     void RHIDeviceVulkan::SetPushConstants(const RHIFrameContext& frameContext,
-                                           std::set<ShaderStage> stageFlags,
+                                           RHIPipelineLayoutHandle pipelineLayoutHandle,
+                                           ShaderStageFlags stageFlags,
                                            uint32_t offset,
                                            uint32_t size,
-                                           const void* data) {}
+                                           const void* data) {
+        const auto* commandBuffer = commandBufferResourcePool.Get(frameContext.GetCommandBuffer());
+        const auto* layout = pipelineLayoutResourcePool.Get(pipelineLayoutHandle);
+        if (!commandBuffer || !layout) {
+            spdlog::error("SetPushConstants: invalid command buffer or pipeline layout handle");
+            return;
+        }
+        vkCmdPushConstants(*commandBuffer, *layout, ConvertShaderStageFlagsToVulkan(stageFlags), offset, size, data);
+    }
+
+    RHIDescriptorSetHandle RHIDeviceVulkan::CreateDescriptorSet(RHIDescriptorSetLayoutHandle layoutHandle) {
+        const auto* layout = descriptorSetLayoutResourcePool.Get(layoutHandle);
+        if (!layout) {
+            spdlog::error("CreateDescriptorSet: invalid descriptor set layout handle");
+            return RHIDescriptorSetHandle::Null();
+        }
+
+        VkDescriptorSetAllocateInfo allocInfo {
+            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+            .descriptorPool = descriptorPool,
+            .descriptorSetCount = 1,
+            .pSetLayouts = layout,
+        };
+
+        VkDescriptorSet set {VK_NULL_HANDLE};
+        if (const auto result = vkAllocateDescriptorSets(device, &allocInfo, &set); result != VK_SUCCESS) {
+            spdlog::error("Failed to allocate descriptor set. Error: {}", static_cast<int>(result));
+            return RHIDescriptorSetHandle::Null();
+        }
+
+        return descriptorSetResourcePool.Allocate(std::move(set));
+    }
+
+    void RHIDeviceVulkan::UpdateDescriptorSet(RHIDescriptorSetHandle handle,
+                                              std::span<const RHIDescriptorWrite> writes) {
+        const auto* set = descriptorSetResourcePool.Get(handle);
+        if (!set) {
+            spdlog::error("UpdateDescriptorSet: invalid descriptor set handle");
+            return;
+        }
+
+        std::vector<VkWriteDescriptorSet> vkWrites;
+        vkWrites.reserve(writes.size());
+
+        // Storage for descriptor infos (must outlive vkUpdateDescriptorSets)
+        std::vector<VkDescriptorBufferInfo> bufferInfos;
+        bufferInfos.reserve(writes.size());
+
+        for (const auto& write : writes) {
+            VkWriteDescriptorSet vkWrite {
+                .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .dstSet = *set,
+                .dstBinding = write.Binding,
+                .dstArrayElement = 0,
+                .descriptorCount = 1,
+                .descriptorType = ConvertDescriptorTypeToVulkan(write.Type),
+            };
+
+            if (write.Type == DescriptorType::UniformBuffer || write.Type == DescriptorType::StorageBuffer) {
+                const auto* buffers = bufferResourcePool.Get(write.Buffer.Buffer);
+                if (!buffers) {
+                    spdlog::error("UpdateDescriptorSet: invalid buffer handle at binding {}", write.Binding);
+                    continue;
+                }
+                bufferInfos.push_back({
+                    .buffer = (*buffers)[0].Buffer,
+                    .offset = write.Buffer.Offset,
+                    .range = write.Buffer.Range,
+                });
+                vkWrite.pBufferInfo = &bufferInfos.back();
+            } else {
+                spdlog::error("UpdateDescriptorSet: descriptor type {} not yet implemented",
+                              static_cast<int>(write.Type));
+                continue;
+            }
+
+            vkWrites.push_back(vkWrite);
+        }
+
+        vkUpdateDescriptorSets(device, static_cast<uint32_t>(vkWrites.size()), vkWrites.data(), 0, nullptr);
+    }
+
+    void RHIDeviceVulkan::BindDescriptorSet(const RHIFrameContext& frameContext,
+                                            RHIPipelineLayoutHandle pipelineLayoutHandle,
+                                            uint32_t setIndex,
+                                            RHIDescriptorSetHandle descriptorSetHandle) {
+        const auto* commandBuffer = commandBufferResourcePool.Get(frameContext.GetCommandBuffer());
+        const auto* layout = pipelineLayoutResourcePool.Get(pipelineLayoutHandle);
+        const auto* set = descriptorSetResourcePool.Get(descriptorSetHandle);
+        if (!commandBuffer || !layout || !set) {
+            spdlog::error("BindDescriptorSet: invalid handle(s)");
+            return;
+        }
+        vkCmdBindDescriptorSets(*commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, *layout,
+                                setIndex, 1, set, 0, nullptr);
+    }
+
+    void RHIDeviceVulkan::FreeDescriptorSet(RHIDescriptorSetHandle handle) {
+        descriptorSetResourcePool.Free(handle);
+    }
 
     void RHIDeviceVulkan::Draw(const RHIFrameContext& frameContext,
                                const uint32_t vertexCount,
@@ -604,6 +726,107 @@ namespace OZZ::rendering::vk {
         }
 
         return shaderResourcePool.Allocate(std::move(shader));
+    }
+
+    RHIPipelineLayoutDescriptor RHIDeviceVulkan::GetShaderPipelineLayout(const RHIShaderHandle& shaderHandle) {
+        const auto* shader = shaderResourcePool.Get(shaderHandle);
+        if (!shader) {
+            spdlog::error("Failed to get shader pipeline layout. Shader handle is invalid.");
+            return {};
+        }
+        return shader->GetPipelineLayoutDescriptor();
+    }
+
+    std::pair<RHIPipelineLayoutHandle, std::set<RHIDescriptorSetLayoutHandle>>
+    RHIDeviceVulkan::CreatePipelineLayout(const RHIPipelineLayoutDescriptor& pipelineLayoutDescriptor) {
+        std::set<RHIDescriptorSetLayoutHandle> descriptorSetLayoutHandles;
+        RHIPipelineLayoutHandle pipelineLayoutHandle {RHIPipelineLayoutHandle::Null()};
+        auto cleanOnFailure = [&]() {
+            // TODO: do this!
+            for (const auto& handle : descriptorSetLayoutHandles) {
+                descriptorSetLayoutResourcePool.Free(handle);
+            }
+        };
+
+        for (auto i = 0U; i < pipelineLayoutDescriptor.SetCount; i++) {
+            auto descriptorSetLayoutHandle = CreateDescriptorSetLayout(pipelineLayoutDescriptor.Sets[i]);
+            if (descriptorSetLayoutHandle == RHIDescriptorSetLayoutHandle::Null()) {
+                spdlog::error("Failed to create pipeline layout. Aborting process. See logs for details.");
+                cleanOnFailure();
+                return {RHIPipelineLayoutHandle::Null(), {}};
+            }
+            descriptorSetLayoutHandles.insert(descriptorSetLayoutHandle);
+        }
+        std::vector<VkDescriptorSetLayout> descriptorSetLayouts;
+        descriptorSetLayouts.reserve(descriptorSetLayoutHandles.size());
+        std::ranges::transform(descriptorSetLayoutHandles,
+                               std::back_inserter(descriptorSetLayouts),
+                               [this](const RHIDescriptorSetLayoutHandle& handle) {
+                                   return *descriptorSetLayoutResourcePool.Get(handle);
+                               });
+
+        std::vector<VkPushConstantRange> pushConstantRanges {pipelineLayoutDescriptor.PushConstantCount};
+
+        for (auto i = 0U; i < pipelineLayoutDescriptor.PushConstantCount; i++) {
+            const auto& src = pipelineLayoutDescriptor.PushConstants[i];
+            pushConstantRanges[i] = {
+                .stageFlags = ConvertShaderStageFlagsToVulkan(src.StageFlags),
+                .offset = src.Offset,
+                .size = src.Size,
+            };
+        }
+
+        VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .setLayoutCount = static_cast<uint32_t>(descriptorSetLayouts.size()),
+            .pSetLayouts = descriptorSetLayouts.data(),
+            .pushConstantRangeCount = static_cast<uint32_t>(pushConstantRanges.size()),
+            .pPushConstantRanges = pushConstantRanges.data()};
+
+        VkPipelineLayout pipelineLayout;
+        if (const auto result = vkCreatePipelineLayout(device, &pipelineLayoutCreateInfo, nullptr, &pipelineLayout);
+            result != VK_SUCCESS) {
+            spdlog::error("Failed to create pipeline layout. Error: {}", static_cast<int>(result));
+            cleanOnFailure();
+            return {RHIPipelineLayoutHandle::Null(), {}};
+        };
+        pipelineLayoutHandle = pipelineLayoutResourcePool.Allocate(std::move(pipelineLayout));
+        return {pipelineLayoutHandle, descriptorSetLayoutHandles};
+    }
+
+    RHIDescriptorSetLayoutHandle
+    RHIDeviceVulkan::CreateDescriptorSetLayout(const RHIDescriptorSetLayoutDescriptor& descriptorSetLayoutDescriptor) {
+        RHIDescriptorSetLayoutHandle handle {RHIDescriptorSetLayoutHandle::Null()};
+        // build up the bindings
+        std::vector<VkDescriptorSetLayoutBinding> bindings {descriptorSetLayoutDescriptor.BindingCount};
+        for (auto i = 0U; i < descriptorSetLayoutDescriptor.BindingCount; i++) {
+            auto& srcBinding = descriptorSetLayoutDescriptor.Bindings[i];
+            bindings[i] = {
+                .binding = srcBinding.Binding,
+                .descriptorType = ConvertDescriptorTypeToVulkan(srcBinding.Type),
+                .descriptorCount = srcBinding.Count,
+                .stageFlags = ConvertShaderStageFlagsToVulkan(srcBinding.StageFlags),
+                .pImmutableSamplers = nullptr, // TODO: support immutable samplers when needed
+            };
+        }
+        VkDescriptorSetLayoutCreateInfo layoutCreateInfo {
+            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .bindingCount = descriptorSetLayoutDescriptor.BindingCount,
+            .pBindings = bindings.data(),
+        };
+
+        VkDescriptorSetLayout layout;
+        if (const auto result = vkCreateDescriptorSetLayout(device, &layoutCreateInfo, nullptr, &layout);
+            result != VK_SUCCESS) {
+            spdlog::error("Failed to create descriptor set layout. Error: {}", static_cast<int>(result));
+            return handle;
+        }
+
+        return descriptorSetLayoutResourcePool.Allocate(std::move(layout));
     }
 
     void RHIDeviceVulkan::FreeShader(const RHIShaderHandle& shaderHandle) {
@@ -779,6 +1002,11 @@ namespace OZZ::rendering::vk {
         }
 
         if (!initializeQueue()) {
+            failureMessage();
+            return false;
+        }
+
+        if (!createDescriptorPool()) {
             failureMessage();
             return false;
         }
@@ -1137,6 +1365,35 @@ namespace OZZ::rendering::vk {
 
     bool RHIDeviceVulkan::initializeQueue() {
         vkGetDeviceQueue(device, physicalDevices.SelectedQueueFamily(), 0, &graphicsQueue);
+        return true;
+    }
+
+    bool RHIDeviceVulkan::createDescriptorPool() {
+        constexpr uint32_t PoolSize = 1000;
+        const VkDescriptorPoolSize poolSizes[] = {
+            {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,          PoolSize},
+            {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,          PoolSize},
+            {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,  PoolSize},
+            {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,           PoolSize},
+            {VK_DESCRIPTOR_TYPE_SAMPLER,                 PoolSize},
+            {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,           PoolSize},
+        };
+
+        const VkDescriptorPoolCreateInfo poolCreateInfo {
+            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+            .flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT,
+            .maxSets = PoolSize,
+            .poolSizeCount = static_cast<uint32_t>(std::size(poolSizes)),
+            .pPoolSizes = poolSizes,
+        };
+
+        if (const auto result = vkCreateDescriptorPool(device, &poolCreateInfo, nullptr, &descriptorPool);
+            result != VK_SUCCESS) {
+            spdlog::error("Failed to create descriptor pool. Error: {}", static_cast<int>(result));
+            return false;
+        }
+
+        spdlog::trace("Descriptor pool created");
         return true;
     }
 } // namespace OZZ::rendering::vk

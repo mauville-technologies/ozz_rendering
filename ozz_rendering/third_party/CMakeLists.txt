@@ -2,7 +2,7 @@ project(ozz_rendering_third_party)
 include(FetchContent)
 
 
-find_package(Vulkan REQUIRED COMPONENTS glslang)
+find_package(Vulkan REQUIRED COMPONENTS glslang SPIRV-Tools)
 FetchContent_Declare(
         spdloglib
         GIT_REPOSITORY https://github.com/gabime/spdlog.git
@@ -25,6 +25,14 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(vmalib)
 
+set(SPIRV_REFLECT_STATIC_LIB ON)
+FetchContent_Declare(
+        spirvreflect_lib
+        GIT_REPOSITORY https://github.com/KhronosGroup/SPIRV-Reflect.git
+        GIT_TAG vulkan-sdk-1.4.341.0
+)
+FetchContent_MakeAvailable(spirvreflect_lib)
+
 add_library(${PROJECT_NAME} INTERFACE)
 
 target_compile_definitions(${PROJECT_NAME} INTERFACE VK_NO_PROTOTYPES)
@@ -33,6 +41,8 @@ target_link_libraries(${PROJECT_NAME}
         Vulkan::Headers
         volk
         Vulkan::glslang
+        Vulkan::SPIRV-Tools
+        spirv-reflect-static
         spdlog
         VulkanMemoryAllocator
 )

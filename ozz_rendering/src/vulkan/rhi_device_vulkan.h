@@ -50,15 +50,22 @@ namespace OZZ::rendering::vk {
         void BindShader(const RHIFrameContext&, const RHIShaderHandle&) override;
 
         void BindBuffer(const RHIFrameContext& frameContext, RHIBufferHandle& bufferHandle) override;
-        void BindUniformBuffer(const RHIFrameContext& frameContext,
-                               const RHIBufferHandle& bufferHandle,
-                               uint32_t set,
-                               uint32_t binding) override;
         void SetPushConstants(const RHIFrameContext& frameContext,
-                              std::set<ShaderStage> stageFlags,
+                              RHIPipelineLayoutHandle pipelineLayoutHandle,
+                              ShaderStageFlags stageFlags,
                               uint32_t offset,
                               uint32_t size,
                               const void* data) override;
+
+        // Descriptor sets
+        RHIDescriptorSetHandle CreateDescriptorSet(RHIDescriptorSetLayoutHandle layoutHandle) override;
+        void UpdateDescriptorSet(RHIDescriptorSetHandle handle,
+                                 std::span<const RHIDescriptorWrite> writes) override;
+        void BindDescriptorSet(const RHIFrameContext& frameContext,
+                               RHIPipelineLayoutHandle pipelineLayoutHandle,
+                               uint32_t setIndex,
+                               RHIDescriptorSetHandle descriptorSetHandle) override;
+        void FreeDescriptorSet(RHIDescriptorSetHandle handle) override;
 
         void Draw(const RHIFrameContext& frameContext,
                   uint32_t vertexCount,
@@ -78,6 +85,13 @@ namespace OZZ::rendering::vk {
 
         RHIShaderHandle CreateShader(ShaderFileParams&& shaderFiles) override;
         RHIShaderHandle CreateShader(ShaderSourceParams&& shaderSources) override;
+
+        RHIPipelineLayoutDescriptor GetShaderPipelineLayout(const RHIShaderHandle& shaderHandle) override;
+        std::pair<RHIPipelineLayoutHandle, std::set<RHIDescriptorSetLayoutHandle>>
+        CreatePipelineLayout(const RHIPipelineLayoutDescriptor& pipelineLayoutDescriptor) override;
+        RHIDescriptorSetLayoutHandle
+        CreateDescriptorSetLayout(const RHIDescriptorSetLayoutDescriptor& descriptorSetLayoutDescriptor) override;
+
         void FreeShader(const RHIShaderHandle&) override;
 
         RHIBufferHandle CreateBuffer(BufferDescriptor&& bufferDescriptor) override;
@@ -93,6 +107,7 @@ namespace OZZ::rendering::vk {
         bool createCommandBufferPool();
         bool createSubmissionContexts();
         bool initializeQueue();
+        bool createDescriptorPool();
 
     private:
         PlatformContext platformContext;
@@ -138,5 +153,10 @@ namespace OZZ::rendering::vk {
         ResourcePool<CommandBufferTag, VkCommandBuffer> commandBufferResourcePool;
         ResourcePool<ShaderTag, RHIShaderVulkan> shaderResourcePool;
         ResourcePool<BufferTag, std::array<RHIBufferVulkan, MaxFramesInFlight>> bufferResourcePool;
+        ResourcePool<PipelineLayoutTag, VkPipelineLayout> pipelineLayoutResourcePool;
+        ResourcePool<DescriptorSetLayoutTag, VkDescriptorSetLayout> descriptorSetLayoutResourcePool;
+        ResourcePool<DescriptorSetTag, VkDescriptorSet> descriptorSetResourcePool;
+
+        VkDescriptorPool descriptorPool {VK_NULL_HANDLE};
     };
 } // namespace OZZ::rendering::vk

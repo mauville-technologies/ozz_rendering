@@ -9,12 +9,14 @@
 #include <functional>
 #include <memory>
 #include <set>
+#include <span>
 #include <string>
 #include <tuple>
 #include <vector>
 
 #include <ozz_rendering/rhi_barrier.h>
 #include <ozz_rendering/rhi_buffer.h>
+#include <ozz_rendering/rhi_descriptors.h>
 #include <ozz_rendering/rhi_handle.h>
 #include <ozz_rendering/rhi_pipeline_state.h>
 #include <ozz_rendering/rhi_renderpass.h>
@@ -125,29 +127,43 @@ namespace OZZ::rendering {
                                  int32_t vertexOffset,
                                  uint32_t firstInstance) = 0;
 
+        virtual void BindShader(const RHIFrameContext& commandBufferHandle, const RHIShaderHandle& shaderHandle) = 0;
+        virtual void BindBuffer(const RHIFrameContext& commandBufferHandle, RHIBufferHandle& bufferHandle) = 0;
+
+        virtual void SetPushConstants(const RHIFrameContext& commandBufferHandle,
+                                      RHIPipelineLayoutHandle pipelineLayoutHandle,
+                                      ShaderStageFlags stageFlags,
+                                      uint32_t offset,
+                                      uint32_t size,
+                                      const void* data) = 0;
+
+        // Descriptor sets
+        virtual RHIDescriptorSetHandle CreateDescriptorSet(RHIDescriptorSetLayoutHandle layoutHandle) = 0;
+        virtual void UpdateDescriptorSet(RHIDescriptorSetHandle handle,
+                                         std::span<const RHIDescriptorWrite> writes) = 0;
+        virtual void BindDescriptorSet(const RHIFrameContext& commandBufferHandle,
+                                       RHIPipelineLayoutHandle pipelineLayoutHandle,
+                                       uint32_t setIndex,
+                                       RHIDescriptorSetHandle descriptorSetHandle) = 0;
+        virtual void FreeDescriptorSet(RHIDescriptorSetHandle handle) = 0;
+
         // Resource creation
         virtual RHITextureHandle CreateTexture() = 0;
 
         virtual RHIShaderHandle CreateShader(ShaderFileParams&& fileParams) = 0;
         virtual RHIShaderHandle CreateShader(ShaderSourceParams&& sourceParams) = 0;
+        virtual RHIPipelineLayoutDescriptor GetShaderPipelineLayout(const RHIShaderHandle& shaderHandle) = 0;
+
+        virtual std::pair<RHIPipelineLayoutHandle, std::set<RHIDescriptorSetLayoutHandle>>
+        CreatePipelineLayout(const RHIPipelineLayoutDescriptor& pipelineLayoutDescriptor) = 0;
+
+        virtual RHIDescriptorSetLayoutHandle
+        CreateDescriptorSetLayout(const RHIDescriptorSetLayoutDescriptor& descriptorSetLayoutDescriptor) = 0;
+
         virtual void FreeShader(const RHIShaderHandle& shaderHandle) = 0;
-        virtual void BindShader(const RHIFrameContext& commandBufferHandle, const RHIShaderHandle& shaderHandle) = 0;
 
         virtual RHIBufferHandle CreateBuffer(BufferDescriptor&& bufferDescriptor) = 0;
         virtual void UpdateBuffer(const RHIBufferHandle&, const void* data, size_t size, size_t offset) = 0;
-
-        virtual void BindBuffer(const RHIFrameContext& commandBufferHandle, RHIBufferHandle& bufferHandle) = 0;
-
-        virtual void BindUniformBuffer(const RHIFrameContext& commandBufferHandle,
-                                       const RHIBufferHandle& bufferHandle,
-                                       uint32_t set,
-                                       uint32_t binding) = 0;
-
-        virtual void SetPushConstants(const RHIFrameContext& commandBufferHandle,
-                                      std::set<ShaderStage> stageFlags,
-                                      uint32_t offset,
-                                      uint32_t size,
-                                      const void* data) = 0;
 
     protected:
         // doing it this way will force the child classes to take in the platform context, which is necessary for

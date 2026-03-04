@@ -4,12 +4,14 @@
 
 #include "rhi_shader_vulkan.h"
 
-#include "spdlog/spdlog.h"
-
 #include <fstream>
+
+#include "spdlog/spdlog.h"
 #include <glslang/Public/ResourceLimits.h>
 #include <glslang/Public/ShaderLang.h>
 #include <glslang/SPIRV/GlslangToSpv.h>
+
+#include <vulkan/utils/shader_reflection.h>
 
 namespace OZZ::rendering::vk {
     RHIShaderVulkan::RHIShaderVulkan(VkDevice device, ShaderFileParams&& shaderFiles) {
@@ -58,6 +60,10 @@ namespace OZZ::rendering::vk {
         }
         shaders.clear();
         shaderStages.clear();
+    }
+
+    RHIPipelineLayoutDescriptor RHIShaderVulkan::GetPipelineLayoutDescriptor() const {
+        return pipelineLayoutDescriptor;
     }
 
     bool RHIShaderVulkan::compileSources(VkDevice device, ShaderSourceParams&& shaderSources) {
@@ -154,6 +160,8 @@ namespace OZZ::rendering::vk {
             shaderStages.emplace_back(VK_SHADER_STAGE_GEOMETRY_BIT);
         }
 
+        pipelineLayoutDescriptor = ReflectPipelineLayoutDescriptor(compiled);
+
         glslang::FinalizeProcess();
         return true;
     }
@@ -172,11 +180,11 @@ namespace OZZ::rendering::vk {
         }
 
         auto shaderProgram = std::make_unique<glslang::TProgram>();
-        auto [vSuccess, vertexShader] = compileShader(ShaderStage::Vertex, shaderSources.Vertex);
+        auto [vSuccess, vertexShader] = compileShader(ShaderStageFlags::Vertex, shaderSources.Vertex);
         if (!vSuccess) {
             return std::nullopt;
         }
-        auto [fSuccess, fragmentShader] = compileShader(ShaderStage::Fragment, shaderSources.Fragment);
+        auto [fSuccess, fragmentShader] = compileShader(ShaderStageFlags::Fragment, shaderSources.Fragment);
         if (!fSuccess) {
             return std::nullopt;
         }
@@ -185,7 +193,7 @@ namespace OZZ::rendering::vk {
         shaderProgram->addShader(fragmentShader.get());
 
         if (const auto& GeometryShader = shaderSources.Geometry; !GeometryShader.empty()) {
-            auto [gSuccess, geometryShader] = compileShader(ShaderStage::Geometry, GeometryShader);
+            auto [gSuccess, geometryShader] = compileShader(ShaderStageFlags::Geometry, GeometryShader);
             if (!gSuccess) {
                 return std::nullopt;
             }
@@ -201,19 +209,19 @@ namespace OZZ::rendering::vk {
 
         spdlog::trace("Successfully linked and compiled shader");
         CompiledShaderProgram compiled {};
-        glslang::GlslangToSpv(*shaderProgram->getIntermediate(ToGLSLANGShaderStage(ShaderStage::Vertex)),
+        glslang::GlslangToSpv(*shaderProgram->getIntermediate(ToGLSLANGShaderStage(ShaderStageFlags::Vertex)),
                               compiled.VertexSpirv);
-        glslang::GlslangToSpv(*shaderProgram->getIntermediate(ToGLSLANGShaderStage(ShaderStage::Fragment)),
+        glslang::GlslangToSpv(*shaderProgram->getIntermediate(ToGLSLANGShaderStage(ShaderStageFlags::Fragment)),
                               compiled.FragmentSpirv);
 
         if (!shaderSources.Geometry.empty()) {
-            glslang::GlslangToSpv(*shaderProgram->getIntermediate(ToGLSLANGShaderStage(ShaderStage::Geometry)),
+            glslang::GlslangToSpv(*shaderProgram->getIntermediate(ToGLSLANGShaderStage(ShaderStageFlags::Geometry)),
                                   compiled.GeometrySpirv);
         }
         return compiled;
     }
 
-    std::pair<bool, std::unique_ptr<glslang::TShader>> RHIShaderVulkan::compileShader(const ShaderStage stage,
+    std::pair<bool, std::unique_ptr<glslang::TShader>> RHIShaderVulkan::compileShader(const ShaderStageFlags stage,
                                                                                       const std::string& glslCode) {
         auto shader = std::make_unique<glslang::TShader>(ToGLSLANGShaderStage(stage));
         const char* code = glslCode.c_str();

@@ -22,6 +22,10 @@ namespace OZZ::rendering {
 
         bool operator==(const RHIHandle& other) const { return Id == other.Id && Generation == other.Generation; }
 
+        bool operator<(const RHIHandle& other) const {
+            return Id != other.Id ? Id < other.Id : Generation < other.Generation;
+        }
+
         [[nodiscard]] bool IsValid() const { return Id != UINT32_MAX; }
     };
 
@@ -29,5 +33,10 @@ namespace OZZ::rendering {
     using RHICommandBufferHandle = RHIHandle<struct CommandBufferTag>;
     using RHIShaderHandle = RHIHandle<struct ShaderTag>;
     using RHIBufferHandle = RHIHandle<struct BufferTag>;
+
+    // Descriptors
+    using RHIPipelineLayoutHandle = RHIHandle<struct PipelineLayoutTag>;
+    using RHIDescriptorSetLayoutHandle = RHIHandle<struct DescriptorSetLayoutTag>;
+    using RHIDescriptorSetHandle = RHIHandle<struct DescriptorSetTag>;
 
 } // namespace OZZ::rendering
