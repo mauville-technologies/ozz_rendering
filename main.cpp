@@ -18,7 +18,6 @@
 #include <glm/glm.hpp>
 
 struct UBOObject {
-    glm::mat4 Model;
     glm::mat4 View;
     glm::mat4 Projection;
 };
@@ -217,13 +216,12 @@ int main() {
     auto model = glm::scale(glm::mat4(1.f), glm::vec3 {200.f, 200.f, 1.f});
 
     auto uboBuffer = rhiDevice->CreateBuffer(OZZ::rendering::BufferDescriptor {
-        .Size = sizeof(projection) + sizeof(view) + sizeof(model),
+        .Size = sizeof(UBOObject),
         .Usage = OZZ::rendering::BufferUsage::UniformBuffer,
         .Access = OZZ::rendering::BufferMemoryAccess::CpuToGpu,
     });
 
     UBOObject uboObject {
-        .Model = model,
         .View = view,
         .Projection = projection,
     };
@@ -253,8 +251,7 @@ int main() {
 
         static auto count = 0U;
         auto oscillation = std::sin(count * 0.001f);
-        uboObject.Model = glm::scale(model, glm::vec3(1.f + 0.5f * oscillation, 1.f + 0.5f * oscillation, 1.f));
-        rhiDevice->UpdateBuffer(uboBuffer, &uboObject, sizeof(UBOObject), 0);
+        const auto currentModel = glm::scale(model, glm::vec3(1.f + 0.5f * oscillation, 1.f + 0.5f * oscillation, 1.f));
         count++;
         glfwPollEvents();
         auto context = rhiDevice->BeginFrame();
@@ -297,6 +294,9 @@ int main() {
                               });
         rhiDevice->BindShader(context, shader);
         rhiDevice->BindDescriptorSet(context, pipelineLayoutHandle, 0, descriptorSet);
+        rhiDevice->SetPushConstants(context, pipelineLayoutHandle,
+                                    OZZ::rendering::ShaderStageFlags::Vertex,
+                                    0, sizeof(currentModel), &currentModel);
 
         rhiDevice->BindBuffer(context, vertexBuffer);
         rhiDevice->BindBuffer(context, indexBuffer);
