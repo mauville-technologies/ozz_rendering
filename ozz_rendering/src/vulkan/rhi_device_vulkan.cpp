@@ -8,6 +8,7 @@
 #include "utils/rhi_vulkan_types.h"
 
 #include <algorithm>
+#include <fstream>
 #include <ranges>
 #include <spdlog/spdlog.h>
 
@@ -57,6 +58,10 @@ namespace OZZ::rendering::vk {
             }
         })
         , shaderResourcePool([this](RHIShaderVulkan& shader) {
+            pipelineLayoutResourcePool.Free(shader.pipelineLayoutHandle);
+            for (const auto& handle : shader.descriptorSetLayoutHandles) {
+                descriptorSetLayoutResourcePool.Free(handle);
+            }
             shader.Destroy(device);
         })
         , bufferResourcePool([this](const std::array<RHIBufferVulkan, MaxFramesInFlight>& buffer) {
@@ -100,14 +105,14 @@ namespace OZZ::rendering::vk {
             graphicsQueue = VK_NULL_HANDLE;
         }
 
-        // clear resource pools
+        // clear resource pools (shaders first — their destroy lambda frees owned layouts)
+        commandBufferResourcePool.Empty();
+        shaderResourcePool.Empty();
         descriptorSetResourcePool.Empty();
         pipelineLayoutResourcePool.Empty();
         descriptorSetLayoutResourcePool.Empty();
         bufferResourcePool.Empty();
-        shaderResourcePool.Empty();
         texturePool.Empty();
-        commandBufferResourcePool.Empty();
 
         for (auto& context : submissionContexts) {
             if (context.InFlightFence != VK_NULL_HANDLE) {
@@ -677,8 +682,7 @@ namespace OZZ::rendering::vk {
             spdlog::error("BindDescriptorSet: invalid handle(s)");
             return;
         }
-        vkCmdBindDescriptorSets(*commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, *layout,
-                                setIndex, 1, set, 0, nullptr);
+        vkCmdBindDescriptorSets(*commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, *layout, setIndex, 1, set, 0, nullptr);
     }
 
     void RHIDeviceVulkan::FreeDescriptorSet(RHIDescriptorSetHandle handle) {
@@ -709,21 +713,73 @@ namespace OZZ::rendering::vk {
     }
 
     RHIShaderHandle RHIDeviceVulkan::CreateShader(ShaderFileParams&& shaderFiles) {
-        RHIShaderVulkan shader {device, std::move(shaderFiles)};
-        if (!shader.IsValid()) {
-            spdlog::error("Failed to create shader from files. Aborting process. See logs for details.");
+        std::ifstream vertexFile(shaderFiles.Vertex);
+        std::ifstream fragmentFile(shaderFiles.Fragment);
+
+        if (!vertexFile.is_open() || !fragmentFile.is_open()) {
+            spdlog::error("Failed to open shader files");
             return RHIShaderHandle::Null();
         }
 
-        return shaderResourcePool.Allocate(std::move(shader));
+        std::string vertexSource((std::istreambuf_iterator<char>(vertexFile)), std::istreambuf_iterator<char>());
+        std::string fragmentSource((std::istreambuf_iterator<char>(fragmentFile)), std::istreambuf_iterator<char>());
+        std::string geometrySource;
+
+        if (!shaderFiles.Geometry.empty()) {
+            std::ifstream geometryFile(shaderFiles.Geometry);
+            geometrySource =
+                std::string((std::istreambuf_iterator<char>(geometryFile)), std::istreambuf_iterator<char>());
+        }
+
+        return CreateShader(ShaderSourceParams {
+            .Vertex = vertexSource,
+            .Geometry = geometrySource,
+            .Fragment = fragmentSource,
+        });
     }
 
     RHIShaderHandle RHIDeviceVulkan::CreateShader(ShaderSourceParams&& shaderSources) {
         RHIShaderVulkan shader {device, std::move(shaderSources)};
-        if (!shader.IsValid()) {
-            spdlog::error("Failed to create shader from files. Aborting process. See logs for details.");
+        if (!shader.IsCompiled()) {
+            spdlog::error("Failed to compile shader. Aborting.");
             return RHIShaderHandle::Null();
         }
+
+        // Build pipeline layout + descriptor set layouts from reflection
+        auto layoutDesc = shader.GetPipelineLayoutDescriptor();
+        auto [pipelineLayoutHandle, dsLayoutHandles] = CreatePipelineLayout(layoutDesc);
+        if (!pipelineLayoutHandle.IsValid()) {
+            return RHIShaderHandle::Null();
+        }
+
+        // Gather VkDescriptorSetLayout objects (ordered by set index = pool allocation order)
+        std::vector<VkDescriptorSetLayout> vkDsLayouts;
+        vkDsLayouts.reserve(dsLayoutHandles.size());
+        for (const auto& handle : dsLayoutHandles) {
+            vkDsLayouts.push_back(*descriptorSetLayoutResourcePool.Get(handle));
+        }
+
+        // Gather VkPushConstantRange objects
+        std::vector<VkPushConstantRange> vkPushConstants;
+        for (uint32_t i = 0; i < layoutDesc.PushConstantCount; i++) {
+            vkPushConstants.push_back({
+                .stageFlags = ConvertShaderStageFlagsToVulkan(layoutDesc.PushConstants[i].StageFlags),
+                .offset = layoutDesc.PushConstants[i].Offset,
+                .size = layoutDesc.PushConstants[i].Size,
+            });
+        }
+
+        if (!shader.CreateVkShaders(device, vkDsLayouts, vkPushConstants)) {
+            pipelineLayoutResourcePool.Free(pipelineLayoutHandle);
+            for (const auto& handle : dsLayoutHandles) {
+                descriptorSetLayoutResourcePool.Free(handle);
+            }
+            return RHIShaderHandle::Null();
+        }
+
+        shader.pipelineLayoutHandle = pipelineLayoutHandle;
+        shader.descriptorSetLayoutHandles =
+            std::vector<RHIDescriptorSetLayoutHandle>(dsLayoutHandles.begin(), dsLayoutHandles.end());
 
         return shaderResourcePool.Allocate(std::move(shader));
     }
@@ -735,6 +791,25 @@ namespace OZZ::rendering::vk {
             return {};
         }
         return shader->GetPipelineLayoutDescriptor();
+    }
+
+    RHIPipelineLayoutHandle RHIDeviceVulkan::GetShaderPipelineLayoutHandle(const RHIShaderHandle& shaderHandle) {
+        const auto* shader = shaderResourcePool.Get(shaderHandle);
+        if (!shader) {
+            spdlog::error("GetShaderPipelineLayoutHandle: invalid shader handle");
+            return RHIPipelineLayoutHandle::Null();
+        }
+        return shader->pipelineLayoutHandle;
+    }
+
+    std::vector<RHIDescriptorSetLayoutHandle>
+    RHIDeviceVulkan::GetShaderDescriptorSetLayoutHandles(const RHIShaderHandle& shaderHandle) {
+        const auto* shader = shaderResourcePool.Get(shaderHandle);
+        if (!shader) {
+            spdlog::error("GetShaderDescriptorSetLayoutHandles: invalid shader handle");
+            return {};
+        }
+        return shader->descriptorSetLayoutHandles;
     }
 
     std::pair<RHIPipelineLayoutHandle, std::set<RHIDescriptorSetLayoutHandle>>
@@ -1371,12 +1446,12 @@ namespace OZZ::rendering::vk {
     bool RHIDeviceVulkan::createDescriptorPool() {
         constexpr uint32_t PoolSize = 1000;
         const VkDescriptorPoolSize poolSizes[] = {
-            {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,          PoolSize},
-            {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,          PoolSize},
-            {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,  PoolSize},
-            {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,           PoolSize},
-            {VK_DESCRIPTOR_TYPE_SAMPLER,                 PoolSize},
-            {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,           PoolSize},
+            {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, PoolSize},
+            {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, PoolSize},
+            {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, PoolSize},
+            {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, PoolSize},
+            {VK_DESCRIPTOR_TYPE_SAMPLER, PoolSize},
+            {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, PoolSize},
         };
 
         const VkDescriptorPoolCreateInfo poolCreateInfo {

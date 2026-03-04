@@ -20,6 +20,9 @@ FetchContent_Declare(
 
 FetchContent_MakeAvailable(glmlib)
 
+target_compile_definitions(glm INTERFACE
+        GLM_FORCE_DEPTH_ZERO_TO_ONE
+)
 
 add_executable(${PROJECT_NAME} main.cpp)
 

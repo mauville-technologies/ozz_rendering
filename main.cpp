@@ -160,8 +160,9 @@ int main() {
         .Fragment = base / "basic.frag",
     });
 
-    // Cache the pipeline layouts
-    auto shaderLayouts = rhiDevice->CreatePipelineLayout(rhiDevice->GetShaderPipelineLayout(shader));
+    // Pipeline layout and descriptor set layouts are created automatically with the shader
+    auto pipelineLayoutHandle = rhiDevice->GetShaderPipelineLayoutHandle(shader);
+    auto descriptorSetLayoutHandles = rhiDevice->GetShaderDescriptorSetLayoutHandles(shader);
 
     // Let's create my vertex buffer now
     auto vertexBuffer = rhiDevice->CreateBuffer(OZZ::rendering::BufferDescriptor {
@@ -188,9 +189,9 @@ int main() {
 
     rhiDevice->UpdateBuffer(vertexBuffer,
                             std::array {
-                                Vertex {{0.f, -0.5f, 0.5f}, {1.f, 1.f, 0.f, 1.f}},
-                                Vertex {{0.5f, 0.5f, 0.5f}, {0.f, 1.f, 1.f, 1.f}},
-                                Vertex {{-0.5f, 0.5f, 0.5f}, {0.f, 0.f, 1.f, 1.f}},
+                                Vertex {{0.f, -0.5f, 0.0f}, {1.f, 1.f, 0.f, 1.f}},
+                                Vertex {{0.5f, 0.5f, 0.0f}, {0.f, 1.f, 1.f, 1.f}},
+                                Vertex {{-0.5f, 0.5f, 0.0f}, {0.f, 0.f, 1.f, 1.f}},
                             }
                                 .data(),
                             sizeof(Vertex) * 3,
@@ -211,9 +212,9 @@ int main() {
 
     auto projection =
         glm::ortho(-WINDOW_WIDTH / 2.f, WINDOW_WIDTH / 2.f, -WINDOW_HEIGHT / 2.f, WINDOW_HEIGHT / 2.f, 0.1f, 10.f);
-    projection[0][0] *= -1; // flip x axis to match vulkan's coordinate system
+    // projection[1][1] *= -1; // flip y axis to match vulkan's coordinate system
     const auto view = glm::lookAt(glm::vec3(0.f, 0.f, 2.f), glm::vec3(0.f, 0.f, 0.f), glm::vec3(0.f, 1.f, 0.f));
-    auto model = glm::mat4(1.f);
+    auto model = glm::scale(glm::mat4(1.f), glm::vec3 {200.f, 200.f, 1.f});
 
     auto uboBuffer = rhiDevice->CreateBuffer(OZZ::rendering::BufferDescriptor {
         .Size = sizeof(projection) + sizeof(view) + sizeof(model),
@@ -233,14 +234,39 @@ int main() {
         return 1;
     }
 
+    // Create and populate descriptor set for the UBO (set=0, binding=0)
+    auto descriptorSet = rhiDevice->CreateDescriptorSet(*descriptorSetLayoutHandles.begin());
+    if (!descriptorSet.IsValid()) {
+        spdlog::error("Failed to create descriptor set");
+        return 1;
+    }
+    std::array uboWrites = {
+        OZZ::rendering::RHIDescriptorWrite {
+            .Binding = 0,
+            .Type = OZZ::rendering::DescriptorType::UniformBuffer,
+            .Buffer = {.Buffer = uboBuffer, .Offset = 0, .Range = sizeof(UBOObject)},
+        },
+    };
+    rhiDevice->UpdateDescriptorSet(descriptorSet, uboWrites);
+
     while (!glfwWindowShouldClose(window)) {
 
+        static auto count = 0U;
+        auto oscillation = std::sin(count * 0.001f);
+        uboObject.Model = glm::scale(model, glm::vec3(1.f + 0.5f * oscillation, 1.f + 0.5f * oscillation, 1.f));
+        rhiDevice->UpdateBuffer(uboBuffer, &uboObject, sizeof(UBOObject), 0);
+        count++;
         glfwPollEvents();
         auto context = rhiDevice->BeginFrame();
         renderPassDescriptor.ColorAttachments[0].Texture = context.GetBackbuffer();
         rhiDevice->BeginRenderPass(context, renderPassDescriptor);
         rhiDevice->SetGraphicsState(context,
                                     {
+                                        .Rasterization =
+                                            {
+                                                .Cull = OZZ::rendering::CullMode::None,
+                                                .Front = OZZ::rendering::FrontFace::CounterClockwise,
+                                            },
                                         .ColorBlend = {{
                                             .BlendEnable = false,
                                         }},
@@ -270,6 +296,7 @@ int main() {
                                   .Height = WINDOW_HEIGHT,
                               });
         rhiDevice->BindShader(context, shader);
+        rhiDevice->BindDescriptorSet(context, pipelineLayoutHandle, 0, descriptorSet);
 
         rhiDevice->BindBuffer(context, vertexBuffer);
         rhiDevice->BindBuffer(context, indexBuffer);

@@ -67,19 +67,28 @@ namespace OZZ::rendering::vk {
     }
 
     bool RHIShaderVulkan::compileSources(VkDevice device, ShaderSourceParams&& shaderSources) {
-        shaderStages.clear();
-        shaders.clear();
-
         auto compiledOpt = compileProgram(shaderSources);
         if (!compiledOpt.has_value()) {
             spdlog::error("Failed to compile shader program. Aborting process. See logs for details.");
             return false;
         }
 
-        auto& compiled = compiledOpt.value();
+        compiledProgram = std::move(compiledOpt.value());
+        bHasGeometry = !shaderSources.Geometry.empty();
+        pipelineLayoutDescriptor = ReflectPipelineLayoutDescriptor(compiledProgram);
+
+        glslang::FinalizeProcess();
+        bIsCompiled = true;
+        return true;
+    }
+
+    bool RHIShaderVulkan::CreateVkShaders(VkDevice device,
+                                          const std::vector<VkDescriptorSetLayout>& setLayouts,
+                                          const std::vector<VkPushConstantRange>& pushConstantRanges) {
+        shaderStages.clear();
+        shaders.clear();
 
         std::vector<VkShaderCreateInfoEXT> createInfos;
-        // get vertex code
         VkShaderCreateInfoEXT vertexCreateInfo {
             .sType = VK_STRUCTURE_TYPE_SHADER_CREATE_INFO_EXT,
             .pNext = nullptr,
@@ -87,21 +96,20 @@ namespace OZZ::rendering::vk {
             .stage = VK_SHADER_STAGE_VERTEX_BIT,
             .nextStage = VK_SHADER_STAGE_FRAGMENT_BIT,
             .codeType = VK_SHADER_CODE_TYPE_SPIRV_EXT,
-            .codeSize = compiled.VertexSpirv.size() * sizeof(uint32_t),
-            .pCode = compiled.VertexSpirv.data(),
+            .codeSize = compiledProgram.VertexSpirv.size() * sizeof(uint32_t),
+            .pCode = compiledProgram.VertexSpirv.data(),
             .pName = "main",
-            .setLayoutCount = 0,
-            .pSetLayouts = nullptr,
-            .pushConstantRangeCount = 0,
-            .pPushConstantRanges = nullptr,
+            .setLayoutCount = static_cast<uint32_t>(setLayouts.size()),
+            .pSetLayouts = setLayouts.data(),
+            .pushConstantRangeCount = static_cast<uint32_t>(pushConstantRanges.size()),
+            .pPushConstantRanges = pushConstantRanges.data(),
             .pSpecializationInfo = nullptr,
         };
 
         createInfos.emplace_back(vertexCreateInfo);
         shaderStages.emplace_back(VK_SHADER_STAGE_VERTEX_BIT);
 
-        bool bHasGeo = !shaderSources.Geometry.empty();
-        if (bHasGeo) {
+        if (bHasGeometry) {
             VkShaderCreateInfoEXT geometryCreateInfo {
                 .sType = VK_STRUCTURE_TYPE_SHADER_CREATE_INFO_EXT,
                 .pNext = nullptr,
@@ -109,17 +117,16 @@ namespace OZZ::rendering::vk {
                 .stage = VK_SHADER_STAGE_GEOMETRY_BIT,
                 .nextStage = VK_SHADER_STAGE_FRAGMENT_BIT,
                 .codeType = VK_SHADER_CODE_TYPE_SPIRV_EXT,
-                .codeSize = compiled.GeometrySpirv.size() * sizeof(uint32_t),
-                .pCode = compiled.GeometrySpirv.data(),
+                .codeSize = compiledProgram.GeometrySpirv.size() * sizeof(uint32_t),
+                .pCode = compiledProgram.GeometrySpirv.data(),
                 .pName = "main",
-                .setLayoutCount = 0,
-                .pSetLayouts = nullptr,
-                .pushConstantRangeCount = 0,
-                .pPushConstantRanges = nullptr,
+                .setLayoutCount = static_cast<uint32_t>(setLayouts.size()),
+                .pSetLayouts = setLayouts.data(),
+                .pushConstantRangeCount = static_cast<uint32_t>(pushConstantRanges.size()),
+                .pPushConstantRanges = pushConstantRanges.data(),
                 .pSpecializationInfo = nullptr,
             };
 
-            // vertex will go to geometry instead
             createInfos[0].nextStage = VK_SHADER_STAGE_GEOMETRY_BIT;
             createInfos.emplace_back(geometryCreateInfo);
             shaderStages.emplace_back(VK_SHADER_STAGE_GEOMETRY_BIT);
@@ -132,13 +139,13 @@ namespace OZZ::rendering::vk {
             .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
             .nextStage = 0,
             .codeType = VK_SHADER_CODE_TYPE_SPIRV_EXT,
-            .codeSize = compiled.FragmentSpirv.size() * sizeof(uint32_t),
-            .pCode = compiled.FragmentSpirv.data(),
+            .codeSize = compiledProgram.FragmentSpirv.size() * sizeof(uint32_t),
+            .pCode = compiledProgram.FragmentSpirv.data(),
             .pName = "main",
-            .setLayoutCount = 0,
-            .pSetLayouts = nullptr,
-            .pushConstantRangeCount = 0,
-            .pPushConstantRanges = nullptr,
+            .setLayoutCount = static_cast<uint32_t>(setLayouts.size()),
+            .pSetLayouts = setLayouts.data(),
+            .pushConstantRangeCount = static_cast<uint32_t>(pushConstantRanges.size()),
+            .pPushConstantRanges = pushConstantRanges.data(),
             .pSpecializationInfo = nullptr,
         };
 
@@ -149,20 +156,17 @@ namespace OZZ::rendering::vk {
         if (const auto result =
                 vkCreateShadersEXT(device, createInfos.size(), createInfos.data(), nullptr, shaders.data());
             result != VK_SUCCESS) {
-
             spdlog::error("Failed to create shader objects, error code: {}", static_cast<int>(result));
             return false;
         }
         spdlog::trace("Successfully created shader object");
 
-        if (!bHasGeo) {
+        if (!bHasGeometry) {
             shaders.emplace_back(VK_NULL_HANDLE);
             shaderStages.emplace_back(VK_SHADER_STAGE_GEOMETRY_BIT);
         }
 
-        pipelineLayoutDescriptor = ReflectPipelineLayoutDescriptor(compiled);
-
-        glslang::FinalizeProcess();
+        bIsValid = true;
         return true;
     }
 

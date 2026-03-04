@@ -153,6 +153,9 @@ namespace OZZ::rendering {
         virtual RHIShaderHandle CreateShader(ShaderFileParams&& fileParams) = 0;
         virtual RHIShaderHandle CreateShader(ShaderSourceParams&& sourceParams) = 0;
         virtual RHIPipelineLayoutDescriptor GetShaderPipelineLayout(const RHIShaderHandle& shaderHandle) = 0;
+        virtual RHIPipelineLayoutHandle GetShaderPipelineLayoutHandle(const RHIShaderHandle& shaderHandle) = 0;
+        virtual std::vector<RHIDescriptorSetLayoutHandle>
+        GetShaderDescriptorSetLayoutHandles(const RHIShaderHandle& shaderHandle) = 0;
 
         virtual std::pair<RHIPipelineLayoutHandle, std::set<RHIDescriptorSetLayoutHandle>>
         CreatePipelineLayout(const RHIPipelineLayoutDescriptor& pipelineLayoutDescriptor) = 0;

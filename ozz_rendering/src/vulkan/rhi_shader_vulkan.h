@@ -40,8 +40,17 @@ namespace OZZ::rendering::vk {
         void Destroy(VkDevice vk_device);
 
         [[nodiscard]] bool IsValid() const { return bIsValid; }
+        [[nodiscard]] bool IsCompiled() const { return bIsCompiled; }
 
         RHIPipelineLayoutDescriptor GetPipelineLayoutDescriptor() const;
+
+        bool CreateVkShaders(VkDevice device,
+                             const std::vector<VkDescriptorSetLayout>& setLayouts,
+                             const std::vector<VkPushConstantRange>& pushConstantRanges);
+
+        // Owned layout handles — set by RHIDeviceVulkan after CreateVkShaders
+        RHIPipelineLayoutHandle pipelineLayoutHandle {};
+        std::vector<RHIDescriptorSetLayoutHandle> descriptorSetLayoutHandles {};
 
     private:
         bool compileSources(VkDevice device, ShaderSourceParams&& shaderSources);
@@ -53,7 +62,10 @@ namespace OZZ::rendering::vk {
         std::vector<VkShaderEXT> shaders {};
         std::vector<VkShaderStageFlagBits> shaderStages {};
 
+        CompiledShaderProgram compiledProgram {};
+        bool bHasGeometry {false};
         bool bIsValid {false};
+        bool bIsCompiled {false};
 
         RHIPipelineLayoutDescriptor pipelineLayoutDescriptor {};
     };

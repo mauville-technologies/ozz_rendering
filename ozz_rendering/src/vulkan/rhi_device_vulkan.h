@@ -87,6 +87,9 @@ namespace OZZ::rendering::vk {
         RHIShaderHandle CreateShader(ShaderSourceParams&& shaderSources) override;
 
         RHIPipelineLayoutDescriptor GetShaderPipelineLayout(const RHIShaderHandle& shaderHandle) override;
+        RHIPipelineLayoutHandle GetShaderPipelineLayoutHandle(const RHIShaderHandle& shaderHandle) override;
+        std::vector<RHIDescriptorSetLayoutHandle>
+        GetShaderDescriptorSetLayoutHandles(const RHIShaderHandle& shaderHandle) override;
         std::pair<RHIPipelineLayoutHandle, std::set<RHIDescriptorSetLayoutHandle>>
         CreatePipelineLayout(const RHIPipelineLayoutDescriptor& pipelineLayoutDescriptor) override;
         RHIDescriptorSetLayoutHandle
