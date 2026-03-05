@@ -38,6 +38,10 @@ namespace OZZ::rendering::vk {
         return VK_TRUE;
     }
 
+    // ============================================================
+    // === Constructor / Destructor ===
+    // ============================================================
+
     RHIDeviceVulkan::RHIDeviceVulkan(const PlatformContext& context)
         : RHIDevice(context)
         , platformContext(context)
@@ -195,794 +199,9 @@ namespace OZZ::rendering::vk {
         spdlog::info("Tore down Vulkan RHI device");
     }
 
-    RHIFrameContext RHIDeviceVulkan::BeginFrame() {
-        const auto& submissionContext = submissionContexts[currentFrame];
-        if (const auto fenceResult = vkWaitForFences(device, 1, &submissionContext.InFlightFence, VK_TRUE, UINT64_MAX);
-            fenceResult != VK_SUCCESS) {
-            spdlog::error("Failed to wait for fence in BeginFrame. Error: {}", static_cast<int>(fenceResult));
-            return RHIFrameContext::Null();
-        }
-
-        vkResetFences(device, 1, &submissionContext.InFlightFence);
-
-        uint32_t imageIndex;
-
-        if (const auto result = vkAcquireNextImageKHR(device,
-                                                      swapchain,
-                                                      UINT64_MAX,
-                                                      submissionContext.AcquireImageSemaphore,
-                                                      VK_NULL_HANDLE,
-                                                      &imageIndex);
-            result != VK_SUCCESS) {
-            spdlog::error("Failed to acquire next image in BeginFrame. Error: {}", static_cast<int>(result));
-            return RHIFrameContext::Null();
-        }
-
-        const auto commandBuffer = commandBufferResourcePool.Get(submissionContext.CommandBuffer);
-
-        VkCommandBufferBeginInfo VkCommandBufferBeginInfo {
-            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-            .pNext = nullptr,
-            .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
-            .pInheritanceInfo = nullptr,
-        };
-
-        if (const auto result = vkBeginCommandBuffer(*commandBuffer, &VkCommandBufferBeginInfo); result != VK_SUCCESS) {
-            spdlog::error("Failed to begin command buffer in BeginFrame. Error: {}", static_cast<int>(result));
-            return RHIFrameContext::Null();
-        }
-
-        auto frameContext = BuildFrameContext(submissionContext.CommandBuffer,
-                                              swapchainTextureHandles[imageIndex],
-                                              imageIndex,
-                                              currentFrame);
-        TextureResourceBarrier(frameContext,
-                               TextureBarrierDescriptor {
-                                   .Texture = swapchainTextureHandles[imageIndex],
-                                   .OldLayout = TextureLayout::Undefined,
-                                   .NewLayout = TextureLayout::ColorAttachment,
-                                   .SrcStage = PipelineStage::ColorAttachmentOutput,
-                                   .DstStage = PipelineStage::ColorAttachmentOutput,
-                                   .SrcAccess = Access::None,
-                                   .DstAccess = Access::ColorAttachmentWrite,
-                               });
-
-        return std::move(frameContext);
-    }
-
-    void RHIDeviceVulkan::SubmitAndPresentFrame(RHIFrameContext&& frameContext) {
-        // Prepare swapchain image for presentation
-        const auto imageIndex = GetImageIndexFromFrameContext(frameContext);
-
-        TextureResourceBarrier(frameContext,
-                               TextureBarrierDescriptor {
-                                   .Texture = swapchainTextureHandles[imageIndex],
-                                   .OldLayout = TextureLayout::ColorAttachment,
-                                   .NewLayout = TextureLayout::Present,
-                                   .SrcStage = PipelineStage::ColorAttachmentOutput,
-                                   .DstStage = PipelineStage::None,
-                                   .SrcAccess = Access::ColorAttachmentWrite,
-                                   .DstAccess = Access::None,
-                               });
-
-        auto commandBuffer = commandBufferResourcePool.Get(frameContext.GetCommandBuffer());
-        if (const auto result = vkEndCommandBuffer(*commandBuffer); result != VK_SUCCESS) {
-            spdlog::error("Failed to end command buffer in SubmitFrame. Error: {}", static_cast<int>(result));
-            return;
-        }
-
-        const auto frameNumber = GetFrameNumberFromFrameContext(frameContext);
-        auto& submissionContext = submissionContexts[frameNumber];
-        VkPipelineStageFlags waitFlags {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
-        VkSubmitInfo submitInfo {
-            .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
-            .pNext = nullptr,
-            .waitSemaphoreCount = 1,
-            .pWaitSemaphores = &submissionContext.AcquireImageSemaphore,
-            .pWaitDstStageMask = &waitFlags,
-            .commandBufferCount = 1,
-            .pCommandBuffers = commandBuffer,
-            .signalSemaphoreCount = 1,
-            .pSignalSemaphores = &presentCompleteSemaphores[imageIndex],
-        };
-
-        if (const auto result = vkQueueSubmit(graphicsQueue, 1, &submitInfo, submissionContext.InFlightFence)) {
-            spdlog::error("Failed to submit command buffer in SubmitFrame. Error: {} | {} / {} | {:x}",
-                          static_cast<int>(result),
-                          imageIndex,
-                          frameNumber,
-                          reinterpret_cast<uint64_t>(presentCompleteSemaphores[imageIndex]));
-            return;
-        }
-
-        VkPresentInfoKHR presentInfo {
-            .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
-            .pNext = nullptr,
-            .waitSemaphoreCount = 1,
-            .pWaitSemaphores = &presentCompleteSemaphores[imageIndex],
-            .swapchainCount = 1,
-            .pSwapchains = &swapchain,
-            .pImageIndices = &imageIndex,
-            .pResults = VK_NULL_HANDLE,
-        };
-
-        if (const auto result = vkQueuePresentKHR(graphicsQueue, &presentInfo); result != VK_SUCCESS) {
-            spdlog::error("Failed to present frame in SubmitFrame. Error: {}", static_cast<int>(result));
-        }
-
-        currentFrame = (currentFrame + 1) % framesInFlight;
-    }
-
-    void RHIDeviceVulkan::BeginRenderPass(const RHIFrameContext& frameContext,
-                                          const RenderPassDescriptor& renderPassDescriptor) {
-        std::vector<VkRenderingAttachmentInfo> colorAttachments;
-        bool bHasDepthStencilAttachment = false;
-        VkRenderingAttachmentInfo depthStencilAttachment;
-
-        for (auto i = 0u; i < renderPassDescriptor.ColorAttachmentCount; i++) {
-            const auto& attachment = renderPassDescriptor.ColorAttachments[i];
-            if (attachment.Texture == RHITextureHandle::Null()) {
-                spdlog::error("Color attachment {} is null in BeginRenderPass", i);
-                continue;
-            }
-            VkClearValue clearValue;
-            const auto* texture = texturePool.Get(attachment.Texture);
-            if (attachment.Layout == TextureLayout::ColorAttachment) {
-                clearValue.color = {
-                    attachment.Clear.R,
-                    attachment.Clear.G,
-                    attachment.Clear.B,
-                    attachment.Clear.A,
-                };
-            }
-            if (attachment.Layout == TextureLayout::DepthStencilAttachment) {
-                clearValue = VkClearValue {
-                    .depthStencil =
-                        {
-                            .depth = attachment.Clear.Depth,
-                            .stencil = attachment.Clear.Stencil,
-                        },
-                };
-            }
-
-            VkRenderingAttachmentInfo attachmentInfo {
-                .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
-                .pNext = nullptr,
-                .imageView = texture->ImageView,
-                .imageLayout = ConvertTextureLayoutToVulkan(attachment.Layout),
-                .loadOp = ConvertLoadOpToVulkan(attachment.Load),
-                .storeOp = ConvertStoreOpToVulkan(attachment.Store),
-                .clearValue = clearValue,
-            };
-
-            if (attachment.Layout == TextureLayout::DepthStencilAttachment) {
-                // TODO: implement this when needed
-                // bHasDepthStencilAttachment = true;
-                // depthStencilAttachment = attachmentInfo;
-                // depthStencilAttachment.imageLayout =
-                //     ConvertTextureLayoutToVulkan(TextureLayout::DepthStencilAttachment);
-                // depthStencilAttachment.loadOp = ConvertLoadOpToVulkan(attachment.Load);
-                // depthStencilAttachment.storeOp = ConvertStoreOpToVulkan(attachment.Store);
-                assert(false && "Depth stencil attachments not implemented!!");
-            } else {
-                colorAttachments.emplace_back(attachmentInfo);
-            }
-        }
-
-        VkRenderingInfo renderingInfo {
-            .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
-            .pNext = nullptr,
-            .flags = 0,
-            .renderArea =
-                {
-                    .offset =
-                        {
-                            .x = renderPassDescriptor.RenderArea.X,
-                            .y = renderPassDescriptor.RenderArea.Y,
-                        },
-                    .extent =
-                        {
-                            .width = renderPassDescriptor.RenderArea.Width,
-                            .height = renderPassDescriptor.RenderArea.Height,
-                        },
-                },
-            .layerCount = 1,
-            .colorAttachmentCount = static_cast<uint32_t>(colorAttachments.size()),
-            .pColorAttachments = colorAttachments.data(),
-            .pDepthAttachment = bHasDepthStencilAttachment ? &depthStencilAttachment : nullptr,
-            .pStencilAttachment = bHasDepthStencilAttachment ? &depthStencilAttachment : nullptr,
-        };
-
-        const auto commandBuffer = *commandBufferResourcePool.Get(frameContext.GetCommandBuffer());
-        vkCmdBeginRendering(commandBuffer, &renderingInfo);
-    }
-
-    void RHIDeviceVulkan::EndRenderPass(const RHIFrameContext& frameContext) {
-        const auto commandBuffer = *commandBufferResourcePool.Get(frameContext.GetCommandBuffer());
-        vkCmdEndRendering(commandBuffer);
-    }
-
-    void RHIDeviceVulkan::TextureResourceBarrier(const RHIFrameContext& frameContext,
-                                                 const TextureBarrierDescriptor& barrierDescriptor) {
-        const auto commandBuffer = *commandBufferResourcePool.Get(frameContext.GetCommandBuffer());
-
-        VkImageMemoryBarrier2 imageMemoryBarrier {
-            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
-            .pNext = nullptr,
-            .srcStageMask = ConvertPipelineStageToVulkan(barrierDescriptor.SrcStage),
-            .srcAccessMask = ConvertAccessToVulkan(barrierDescriptor.SrcAccess),
-            .dstStageMask = ConvertPipelineStageToVulkan(barrierDescriptor.DstStage),
-            .dstAccessMask = ConvertAccessToVulkan(barrierDescriptor.DstAccess),
-            .oldLayout = ConvertTextureLayoutToVulkan(barrierDescriptor.OldLayout),
-            .newLayout = ConvertTextureLayoutToVulkan(barrierDescriptor.NewLayout),
-            .srcQueueFamilyIndex = barrierDescriptor.SrcQueueFamily == QueueFamilyIgnored
-                                       ? VK_QUEUE_FAMILY_IGNORED
-                                       : static_cast<uint32_t>(barrierDescriptor.SrcQueueFamily),
-            .dstQueueFamilyIndex = barrierDescriptor.DstQueueFamily == QueueFamilyIgnored
-                                       ? VK_QUEUE_FAMILY_IGNORED
-                                       : static_cast<uint32_t>(barrierDescriptor.DstQueueFamily),
-            .image = texturePool.Get(barrierDescriptor.Texture)->Image,
-            .subresourceRange =
-                {
-                    .aspectMask = ConvertTextureAspectToVulkan(barrierDescriptor.SubresourceRange.Aspect),
-                    .baseMipLevel = barrierDescriptor.SubresourceRange.BaseMipLevel,
-                    .levelCount = barrierDescriptor.SubresourceRange.LevelCount,
-                    .baseArrayLayer = barrierDescriptor.SubresourceRange.BaseArrayLayer,
-                    .layerCount = barrierDescriptor.SubresourceRange.LayerCount,
-                },
-        };
-        VkDependencyInfo barrierDependency {
-            .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
-            .pNext = nullptr,
-            .dependencyFlags = 0,
-            .memoryBarrierCount = 0,
-            .pMemoryBarriers = nullptr,
-            .bufferMemoryBarrierCount = 0,
-            .pBufferMemoryBarriers = nullptr,
-            .imageMemoryBarrierCount = 1,
-            .pImageMemoryBarriers = &imageMemoryBarrier, // to be filled out based on the TextureBarrierDescriptor
-        };
-
-        vkCmdPipelineBarrier2(commandBuffer, &barrierDependency);
-    }
-
-    void RHIDeviceVulkan::BufferMemoryBarrier(const RHIFrameContext&, const BufferBarrierDescriptor&) {
-        assert(false && "Buffer memory barriers not implemented!!");
-    }
-
-    void RHIDeviceVulkan::SetViewport(const RHIFrameContext& frameContext, const Viewport& viewport) {
-        const auto* commandBuffer = commandBufferResourcePool.Get(frameContext.GetCommandBuffer());
-        VkViewport vkViewport {
-            .x = viewport.X,
-            .y = viewport.Y,
-            .width = viewport.Width,
-            .height = viewport.Height,
-            .minDepth = viewport.MinDepth,
-            .maxDepth = viewport.MaxDepth,
-        };
-        vkCmdSetViewportWithCount(*commandBuffer, 1, &vkViewport);
-    }
-
-    void RHIDeviceVulkan::SetScissor(const RHIFrameContext& frameContext, const Scissor& scissor) {
-        const auto* commandBuffer = commandBufferResourcePool.Get(frameContext.GetCommandBuffer());
-        VkRect2D vkScissor {
-            .offset =
-                {
-                    .x = scissor.X,
-                    .y = scissor.Y,
-                },
-            .extent =
-                {
-                    .width = scissor.Width,
-                    .height = scissor.Height,
-                },
-        };
-        vkCmdSetScissorWithCount(*commandBuffer, 1, &vkScissor);
-    }
-
-    void RHIDeviceVulkan::SetGraphicsState(const RHIFrameContext& frameContext,
-                                           const GraphicsStateDescriptor& graphicsStateDescriptor) {
-        const VkCommandBuffer cmd = *commandBufferResourcePool.Get(frameContext.GetCommandBuffer());
-
-        // Input Assembly
-        vkCmdSetPrimitiveTopology(cmd,
-                                  ConvertPrimitiveTopologyToVulkan(graphicsStateDescriptor.InputAssembly.Topology));
-        vkCmdSetPrimitiveRestartEnable(cmd, graphicsStateDescriptor.InputAssembly.PrimitiveRestartEnable);
-
-        // Rasterization
-        vkCmdSetCullMode(cmd, ConvertCullModeToVulkan(graphicsStateDescriptor.Rasterization.Cull));
-        vkCmdSetFrontFace(cmd, ConvertFrontFaceToVulkan(graphicsStateDescriptor.Rasterization.Front));
-        vkCmdSetPolygonModeEXT(cmd, ConvertPolygonModeToVulkan(graphicsStateDescriptor.Rasterization.Polygon));
-        vkCmdSetDepthBiasEnable(cmd, graphicsStateDescriptor.Rasterization.DepthBiasEnable);
-        vkCmdSetRasterizerDiscardEnable(cmd, graphicsStateDescriptor.Rasterization.RasterizerDiscard);
-
-        // Depth / Stencil
-        vkCmdSetDepthTestEnable(cmd, graphicsStateDescriptor.DepthStencil.DepthTestEnable);
-        vkCmdSetDepthWriteEnable(cmd, graphicsStateDescriptor.DepthStencil.DepthWriteEnable);
-        vkCmdSetStencilTestEnable(cmd, graphicsStateDescriptor.DepthStencil.StencilTestEnable);
-
-        // Multisample
-        const VkSampleCountFlagBits sampleCount =
-            ConvertSampleCountToVulkan(graphicsStateDescriptor.Multisample.Samples);
-        const VkSampleMask sampleMask = graphicsStateDescriptor.Multisample.SampleMask;
-        vkCmdSetRasterizationSamplesEXT(cmd, sampleCount);
-        vkCmdSetSampleMaskEXT(cmd, sampleCount, &sampleMask);
-        vkCmdSetAlphaToCoverageEnableEXT(cmd, graphicsStateDescriptor.Multisample.AlphaToCoverageEnable);
-
-        // Color Blend
-        if (graphicsStateDescriptor.ColorBlendAttachmentCount > 0) {
-            VkBool32 blendEnables[MaxBlendAttachments];
-            VkColorComponentFlags colorWriteMasks[MaxBlendAttachments];
-            for (uint32_t i = 0; i < graphicsStateDescriptor.ColorBlendAttachmentCount; ++i) {
-                blendEnables[i] = graphicsStateDescriptor.ColorBlend[i].BlendEnable;
-                colorWriteMasks[i] =
-                    ConvertColorComponentFlagsToVulkan(graphicsStateDescriptor.ColorBlend[i].ColorWriteMask);
-            }
-            vkCmdSetColorBlendEnableEXT(cmd, 0, graphicsStateDescriptor.ColorBlendAttachmentCount, blendEnables);
-            vkCmdSetColorWriteMaskEXT(cmd, 0, graphicsStateDescriptor.ColorBlendAttachmentCount, colorWriteMasks);
-        }
-
-        // Vertex Input
-        VkVertexInputBindingDescription2EXT bindings[MaxVertexBindings];
-        for (uint32_t i = 0; i < graphicsStateDescriptor.VertexInput.BindingCount; ++i) {
-            const auto& src = graphicsStateDescriptor.VertexInput.Bindings[i];
-            bindings[i] = {
-                .sType = VK_STRUCTURE_TYPE_VERTEX_INPUT_BINDING_DESCRIPTION_2_EXT,
-                .pNext = nullptr,
-                .binding = src.Binding,
-                .stride = src.Stride,
-                .inputRate = ConvertVertexInputRateToVulkan(src.InputRate),
-                .divisor = 1,
-            };
-        }
-        VkVertexInputAttributeDescription2EXT attributes[MaxVertexAttributes];
-        for (uint32_t i = 0; i < graphicsStateDescriptor.VertexInput.AttributeCount; ++i) {
-            const auto& src = graphicsStateDescriptor.VertexInput.Attributes[i];
-            attributes[i] = {
-                .sType = VK_STRUCTURE_TYPE_VERTEX_INPUT_ATTRIBUTE_DESCRIPTION_2_EXT,
-                .pNext = nullptr,
-                .location = src.Location,
-                .binding = src.Binding,
-                .format = ConvertVertexFormatToVulkan(src.Format),
-                .offset = src.Offset,
-            };
-        }
-        vkCmdSetVertexInputEXT(cmd,
-                               graphicsStateDescriptor.VertexInput.BindingCount,
-                               bindings,
-                               graphicsStateDescriptor.VertexInput.AttributeCount,
-                               attributes);
-    }
-
-    void RHIDeviceVulkan::BindShader(const RHIFrameContext& frameContext, const RHIShaderHandle& shaderHandle) {
-        if (const auto* shader = shaderResourcePool.Get(shaderHandle)) {
-            const auto commandBuffer = *commandBufferResourcePool.Get(frameContext.GetCommandBuffer());
-            shader->Bind(device, commandBuffer);
-        }
-    }
-
-    void RHIDeviceVulkan::BindBuffer(const RHIFrameContext& frameContext, RHIBufferHandle& bufferHandle) {
-        const auto buffers = bufferResourcePool.Get(bufferHandle);
-        if (!buffers) {
-            spdlog::error("Failed to bind buffer. Buffer handle is invalid.");
-            return;
-        }
-
-        const auto commandBuffer = *commandBufferResourcePool.Get(frameContext.GetCommandBuffer());
-
-        const auto buffer = (*buffers)[GetFrameNumberFromFrameContext(frameContext)];
-
-        if (has(buffer.Usage, BufferUsage::VertexBuffer)) {
-            vkCmdBindVertexBuffers2(commandBuffer, 0, 1, &buffer.Buffer, (VkDeviceSize[]) {0}, nullptr, nullptr);
-            return;
-        }
-
-        if (has(buffer.Usage, BufferUsage::IndexBuffer)) {
-            vkCmdBindIndexBuffer(commandBuffer, buffer.Buffer, 0, VK_INDEX_TYPE_UINT32);
-            return;
-        }
-        assert(false && "Buffer type not implemented.");
-    }
-
-    void RHIDeviceVulkan::SetPushConstants(const RHIFrameContext& frameContext,
-                                           RHIPipelineLayoutHandle pipelineLayoutHandle,
-                                           ShaderStageFlags stageFlags,
-                                           uint32_t offset,
-                                           uint32_t size,
-                                           const void* data) {
-        const auto* commandBuffer = commandBufferResourcePool.Get(frameContext.GetCommandBuffer());
-        const auto* layout = pipelineLayoutResourcePool.Get(pipelineLayoutHandle);
-        if (!commandBuffer || !layout) {
-            spdlog::error("SetPushConstants: invalid command buffer or pipeline layout handle");
-            return;
-        }
-        vkCmdPushConstants(*commandBuffer, *layout, ConvertShaderStageFlagsToVulkan(stageFlags), offset, size, data);
-    }
-
-    RHIDescriptorSetHandle RHIDeviceVulkan::CreateDescriptorSet(RHIDescriptorSetLayoutHandle layoutHandle) {
-        const auto* layout = descriptorSetLayoutResourcePool.Get(layoutHandle);
-        if (!layout) {
-            spdlog::error("CreateDescriptorSet: invalid descriptor set layout handle");
-            return RHIDescriptorSetHandle::Null();
-        }
-
-        VkDescriptorSetAllocateInfo allocInfo {
-            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
-            .descriptorPool = descriptorPool,
-            .descriptorSetCount = 1,
-            .pSetLayouts = layout,
-        };
-
-        VkDescriptorSet set {VK_NULL_HANDLE};
-        if (const auto result = vkAllocateDescriptorSets(device, &allocInfo, &set); result != VK_SUCCESS) {
-            spdlog::error("Failed to allocate descriptor set. Error: {}", static_cast<int>(result));
-            return RHIDescriptorSetHandle::Null();
-        }
-
-        return descriptorSetResourcePool.Allocate(std::move(set));
-    }
-
-    void RHIDeviceVulkan::UpdateDescriptorSet(RHIDescriptorSetHandle handle,
-                                              std::span<const RHIDescriptorWrite> writes) {
-        const auto* set = descriptorSetResourcePool.Get(handle);
-        if (!set) {
-            spdlog::error("UpdateDescriptorSet: invalid descriptor set handle");
-            return;
-        }
-
-        std::vector<VkWriteDescriptorSet> vkWrites;
-        vkWrites.reserve(writes.size());
-
-        // Storage for descriptor infos (must outlive vkUpdateDescriptorSets)
-        std::vector<VkDescriptorBufferInfo> bufferInfos;
-        bufferInfos.reserve(writes.size());
-
-        for (const auto& write : writes) {
-            VkWriteDescriptorSet vkWrite {
-                .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                .dstSet = *set,
-                .dstBinding = write.Binding,
-                .dstArrayElement = 0,
-                .descriptorCount = 1,
-                .descriptorType = ConvertDescriptorTypeToVulkan(write.Type),
-            };
-
-            if (write.Type == DescriptorType::UniformBuffer || write.Type == DescriptorType::StorageBuffer) {
-                const auto* buffers = bufferResourcePool.Get(write.Buffer.Buffer);
-                if (!buffers) {
-                    spdlog::error("UpdateDescriptorSet: invalid buffer handle at binding {}", write.Binding);
-                    continue;
-                }
-                bufferInfos.push_back({
-                    .buffer = (*buffers)[0].Buffer,
-                    .offset = write.Buffer.Offset,
-                    .range = write.Buffer.Range,
-                });
-                vkWrite.pBufferInfo = &bufferInfos.back();
-            } else {
-                spdlog::error("UpdateDescriptorSet: descriptor type {} not yet implemented",
-                              static_cast<int>(write.Type));
-                continue;
-            }
-
-            vkWrites.push_back(vkWrite);
-        }
-
-        vkUpdateDescriptorSets(device, static_cast<uint32_t>(vkWrites.size()), vkWrites.data(), 0, nullptr);
-    }
-
-    void RHIDeviceVulkan::BindDescriptorSet(const RHIFrameContext& frameContext,
-                                            RHIPipelineLayoutHandle pipelineLayoutHandle,
-                                            uint32_t setIndex,
-                                            RHIDescriptorSetHandle descriptorSetHandle) {
-        const auto* commandBuffer = commandBufferResourcePool.Get(frameContext.GetCommandBuffer());
-        const auto* layout = pipelineLayoutResourcePool.Get(pipelineLayoutHandle);
-        const auto* set = descriptorSetResourcePool.Get(descriptorSetHandle);
-        if (!commandBuffer || !layout || !set) {
-            spdlog::error("BindDescriptorSet: invalid handle(s)");
-            return;
-        }
-        vkCmdBindDescriptorSets(*commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, *layout, setIndex, 1, set, 0, nullptr);
-    }
-
-    void RHIDeviceVulkan::FreeDescriptorSet(RHIDescriptorSetHandle handle) {
-        descriptorSetResourcePool.Free(handle);
-    }
-
-    void RHIDeviceVulkan::Draw(const RHIFrameContext& frameContext,
-                               const uint32_t vertexCount,
-                               const uint32_t instanceCount,
-                               const uint32_t firstVertex,
-                               const uint32_t firstInstance) {
-        const auto* commandBuffer = commandBufferResourcePool.Get(frameContext.GetCommandBuffer());
-        vkCmdDraw(*commandBuffer, vertexCount, instanceCount, firstVertex, firstInstance);
-    }
-
-    void RHIDeviceVulkan::DrawIndexed(const RHIFrameContext& frameContext,
-                                      uint32_t indexCount,
-                                      uint32_t instanceCount,
-                                      uint32_t firstIndex,
-                                      int32_t vertexOffset,
-                                      uint32_t firstInstance) {
-        const auto* commandBuffer = commandBufferResourcePool.Get(frameContext.GetCommandBuffer());
-        vkCmdDrawIndexed(*commandBuffer, indexCount, instanceCount, firstIndex, vertexOffset, firstInstance);
-    }
-
-    RHITextureHandle RHIDeviceVulkan::CreateTexture() {
-        return RHITextureHandle::Null();
-    }
-
-    RHIShaderHandle RHIDeviceVulkan::CreateShader(ShaderFileParams&& shaderFiles) {
-        std::ifstream vertexFile(shaderFiles.Vertex);
-        std::ifstream fragmentFile(shaderFiles.Fragment);
-
-        if (!vertexFile.is_open() || !fragmentFile.is_open()) {
-            spdlog::error("Failed to open shader files");
-            return RHIShaderHandle::Null();
-        }
-
-        std::string vertexSource((std::istreambuf_iterator<char>(vertexFile)), std::istreambuf_iterator<char>());
-        std::string fragmentSource((std::istreambuf_iterator<char>(fragmentFile)), std::istreambuf_iterator<char>());
-        std::string geometrySource;
-
-        if (!shaderFiles.Geometry.empty()) {
-            std::ifstream geometryFile(shaderFiles.Geometry);
-            geometrySource =
-                std::string((std::istreambuf_iterator<char>(geometryFile)), std::istreambuf_iterator<char>());
-        }
-
-        return CreateShader(ShaderSourceParams {
-            .Vertex = vertexSource,
-            .Geometry = geometrySource,
-            .Fragment = fragmentSource,
-        });
-    }
-
-    RHIShaderHandle RHIDeviceVulkan::CreateShader(ShaderSourceParams&& shaderSources) {
-        RHIShaderVulkan shader {device, std::move(shaderSources)};
-        if (!shader.IsCompiled()) {
-            spdlog::error("Failed to compile shader. Aborting.");
-            return RHIShaderHandle::Null();
-        }
-
-        // Build pipeline layout + descriptor set layouts from reflection
-        auto layoutDesc = shader.GetPipelineLayoutDescriptor();
-        auto [pipelineLayoutHandle, dsLayoutHandles] = CreatePipelineLayout(layoutDesc);
-        if (!pipelineLayoutHandle.IsValid()) {
-            return RHIShaderHandle::Null();
-        }
-
-        // Gather VkDescriptorSetLayout objects (ordered by set index = pool allocation order)
-        std::vector<VkDescriptorSetLayout> vkDsLayouts;
-        vkDsLayouts.reserve(dsLayoutHandles.size());
-        for (const auto& handle : dsLayoutHandles) {
-            vkDsLayouts.push_back(*descriptorSetLayoutResourcePool.Get(handle));
-        }
-
-        // Gather VkPushConstantRange objects
-        std::vector<VkPushConstantRange> vkPushConstants;
-        for (uint32_t i = 0; i < layoutDesc.PushConstantCount; i++) {
-            vkPushConstants.push_back({
-                .stageFlags = ConvertShaderStageFlagsToVulkan(layoutDesc.PushConstants[i].StageFlags),
-                .offset = layoutDesc.PushConstants[i].Offset,
-                .size = layoutDesc.PushConstants[i].Size,
-            });
-        }
-
-        if (!shader.CreateVkShaders(device, vkDsLayouts, vkPushConstants)) {
-            pipelineLayoutResourcePool.Free(pipelineLayoutHandle);
-            for (const auto& handle : dsLayoutHandles) {
-                descriptorSetLayoutResourcePool.Free(handle);
-            }
-            return RHIShaderHandle::Null();
-        }
-
-        shader.pipelineLayoutHandle = pipelineLayoutHandle;
-        shader.descriptorSetLayoutHandles =
-            std::vector<RHIDescriptorSetLayoutHandle>(dsLayoutHandles.begin(), dsLayoutHandles.end());
-
-        return shaderResourcePool.Allocate(std::move(shader));
-    }
-
-    RHIPipelineLayoutDescriptor RHIDeviceVulkan::GetShaderPipelineLayout(const RHIShaderHandle& shaderHandle) {
-        const auto* shader = shaderResourcePool.Get(shaderHandle);
-        if (!shader) {
-            spdlog::error("Failed to get shader pipeline layout. Shader handle is invalid.");
-            return {};
-        }
-        return shader->GetPipelineLayoutDescriptor();
-    }
-
-    RHIPipelineLayoutHandle RHIDeviceVulkan::GetShaderPipelineLayoutHandle(const RHIShaderHandle& shaderHandle) {
-        const auto* shader = shaderResourcePool.Get(shaderHandle);
-        if (!shader) {
-            spdlog::error("GetShaderPipelineLayoutHandle: invalid shader handle");
-            return RHIPipelineLayoutHandle::Null();
-        }
-        return shader->pipelineLayoutHandle;
-    }
-
-    std::vector<RHIDescriptorSetLayoutHandle>
-    RHIDeviceVulkan::GetShaderDescriptorSetLayoutHandles(const RHIShaderHandle& shaderHandle) {
-        const auto* shader = shaderResourcePool.Get(shaderHandle);
-        if (!shader) {
-            spdlog::error("GetShaderDescriptorSetLayoutHandles: invalid shader handle");
-            return {};
-        }
-        return shader->descriptorSetLayoutHandles;
-    }
-
-    std::pair<RHIPipelineLayoutHandle, std::set<RHIDescriptorSetLayoutHandle>>
-    RHIDeviceVulkan::CreatePipelineLayout(const RHIPipelineLayoutDescriptor& pipelineLayoutDescriptor) {
-        std::set<RHIDescriptorSetLayoutHandle> descriptorSetLayoutHandles;
-        RHIPipelineLayoutHandle pipelineLayoutHandle {RHIPipelineLayoutHandle::Null()};
-        auto cleanOnFailure = [&]() {
-            // TODO: do this!
-            for (const auto& handle : descriptorSetLayoutHandles) {
-                descriptorSetLayoutResourcePool.Free(handle);
-            }
-        };
-
-        for (auto i = 0U; i < pipelineLayoutDescriptor.SetCount; i++) {
-            auto descriptorSetLayoutHandle = CreateDescriptorSetLayout(pipelineLayoutDescriptor.Sets[i]);
-            if (descriptorSetLayoutHandle == RHIDescriptorSetLayoutHandle::Null()) {
-                spdlog::error("Failed to create pipeline layout. Aborting process. See logs for details.");
-                cleanOnFailure();
-                return {RHIPipelineLayoutHandle::Null(), {}};
-            }
-            descriptorSetLayoutHandles.insert(descriptorSetLayoutHandle);
-        }
-        std::vector<VkDescriptorSetLayout> descriptorSetLayouts;
-        descriptorSetLayouts.reserve(descriptorSetLayoutHandles.size());
-        std::ranges::transform(descriptorSetLayoutHandles,
-                               std::back_inserter(descriptorSetLayouts),
-                               [this](const RHIDescriptorSetLayoutHandle& handle) {
-                                   return *descriptorSetLayoutResourcePool.Get(handle);
-                               });
-
-        std::vector<VkPushConstantRange> pushConstantRanges {pipelineLayoutDescriptor.PushConstantCount};
-
-        for (auto i = 0U; i < pipelineLayoutDescriptor.PushConstantCount; i++) {
-            const auto& src = pipelineLayoutDescriptor.PushConstants[i];
-            pushConstantRanges[i] = {
-                .stageFlags = ConvertShaderStageFlagsToVulkan(src.StageFlags),
-                .offset = src.Offset,
-                .size = src.Size,
-            };
-        }
-
-        VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo {
-            .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-            .pNext = nullptr,
-            .flags = 0,
-            .setLayoutCount = static_cast<uint32_t>(descriptorSetLayouts.size()),
-            .pSetLayouts = descriptorSetLayouts.data(),
-            .pushConstantRangeCount = static_cast<uint32_t>(pushConstantRanges.size()),
-            .pPushConstantRanges = pushConstantRanges.data()};
-
-        VkPipelineLayout pipelineLayout;
-        if (const auto result = vkCreatePipelineLayout(device, &pipelineLayoutCreateInfo, nullptr, &pipelineLayout);
-            result != VK_SUCCESS) {
-            spdlog::error("Failed to create pipeline layout. Error: {}", static_cast<int>(result));
-            cleanOnFailure();
-            return {RHIPipelineLayoutHandle::Null(), {}};
-        };
-        pipelineLayoutHandle = pipelineLayoutResourcePool.Allocate(std::move(pipelineLayout));
-        return {pipelineLayoutHandle, descriptorSetLayoutHandles};
-    }
-
-    RHIDescriptorSetLayoutHandle
-    RHIDeviceVulkan::CreateDescriptorSetLayout(const RHIDescriptorSetLayoutDescriptor& descriptorSetLayoutDescriptor) {
-        RHIDescriptorSetLayoutHandle handle {RHIDescriptorSetLayoutHandle::Null()};
-        // build up the bindings
-        std::vector<VkDescriptorSetLayoutBinding> bindings {descriptorSetLayoutDescriptor.BindingCount};
-        for (auto i = 0U; i < descriptorSetLayoutDescriptor.BindingCount; i++) {
-            auto& srcBinding = descriptorSetLayoutDescriptor.Bindings[i];
-            bindings[i] = {
-                .binding = srcBinding.Binding,
-                .descriptorType = ConvertDescriptorTypeToVulkan(srcBinding.Type),
-                .descriptorCount = srcBinding.Count,
-                .stageFlags = ConvertShaderStageFlagsToVulkan(srcBinding.StageFlags),
-                .pImmutableSamplers = nullptr, // TODO: support immutable samplers when needed
-            };
-        }
-        VkDescriptorSetLayoutCreateInfo layoutCreateInfo {
-            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-            .pNext = nullptr,
-            .flags = 0,
-            .bindingCount = descriptorSetLayoutDescriptor.BindingCount,
-            .pBindings = bindings.data(),
-        };
-
-        VkDescriptorSetLayout layout;
-        if (const auto result = vkCreateDescriptorSetLayout(device, &layoutCreateInfo, nullptr, &layout);
-            result != VK_SUCCESS) {
-            spdlog::error("Failed to create descriptor set layout. Error: {}", static_cast<int>(result));
-            return handle;
-        }
-
-        return descriptorSetLayoutResourcePool.Allocate(std::move(layout));
-    }
-
-    void RHIDeviceVulkan::FreeShader(const RHIShaderHandle& shaderHandle) {
-        shaderResourcePool.Free(shaderHandle);
-    }
-
-    RHIBufferHandle RHIDeviceVulkan::CreateBuffer(BufferDescriptor&& bufferDescriptor) {
-        std::array<RHIBufferVulkan, MaxFramesInFlight> buffers;
-
-        for (auto& buffer : buffers) {
-            VkBufferCreateInfo bufferCreateInfo {
-                .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-                .pNext = nullptr,
-                .flags = 0,
-                .size = bufferDescriptor.Size,
-                .usage = ConvertBufferUsageToVulkan(bufferDescriptor.Usage),
-                .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
-                .queueFamilyIndexCount = 0,
-                .pQueueFamilyIndices = nullptr,
-            };
-
-            VmaAllocationCreateInfo allocationCreateInfo {
-                .flags = VMA_ALLOCATION_CREATE_MAPPED_BIT,
-                .usage = ConvertMemoryAccessToVulkan(bufferDescriptor.Access),
-                .requiredFlags = 0,
-                .preferredFlags = 0,
-                .memoryTypeBits = 0,
-                .pool = VK_NULL_HANDLE,
-                .pUserData = nullptr,
-            };
-
-            if (const auto result = vmaCreateBuffer(vmaAllocator,
-                                                    &bufferCreateInfo,
-                                                    &allocationCreateInfo,
-                                                    &buffer.Buffer,
-                                                    &buffer.Allocation,
-                                                    &buffer.AllocationInfo);
-                result != VK_SUCCESS) {
-                spdlog::error("Failed to create buffer. Error: {}", static_cast<int>(result));
-                return RHIBufferHandle::Null();
-            }
-
-            buffer.Access = bufferDescriptor.Access;
-            buffer.Usage = bufferDescriptor.Usage;
-        }
-
-        const auto handle = bufferResourcePool.Allocate(std::move(buffers));
-
-        return handle;
-    }
-
-    void
-    RHIDeviceVulkan::UpdateBuffer(const RHIBufferHandle& bufferHandle, const void* data, size_t size, size_t offset) {
-        const auto buffers = bufferResourcePool.Get(bufferHandle);
-        if (!buffers) {
-            spdlog::error("Failed to update buffer. Buffer handle is invalid.");
-            return;
-        }
-
-        for (const auto& buffer : *buffers) {
-            // ensure usage is CPU accessible
-            if (buffer.Access == BufferMemoryAccess::GpuOnly) {
-                spdlog::error("Failed to update buffer. Buffer is not CPU accessible.");
-                return;
-            }
-
-            // make sure offset + size does not exceed buffer size
-            if (offset + size > buffer.AllocationInfo.size) {
-                spdlog::error("Failed to update buffer. Data size exceeds buffer size.");
-                return;
-            }
-
-            void* mappedData = buffer.AllocationInfo.pMappedData;
-            if (!mappedData) {
-                spdlog::error("Failed to update buffer. Buffer memory is not mapped.");
-                return;
-            }
-            std::memcpy(static_cast<uint8_t*>(mappedData) + offset, data, size);
-            vmaFlushAllocation(vmaAllocator, buffer.Allocation, offset, size);
-        }
-    }
+    // ============================================================
+    // === Initialization ===
+    // ============================================================
 
     bool RHIDeviceVulkan::initialize() {
         spdlog::info("Initializing Vulkan RHI device");
@@ -1471,4 +690,906 @@ namespace OZZ::rendering::vk {
         spdlog::trace("Descriptor pool created");
         return true;
     }
+
+    // ============================================================
+    // === Frame ===
+    // ============================================================
+
+    RHIFrameContext RHIDeviceVulkan::BeginFrame() {
+        const auto& submissionContext = submissionContexts[currentFrame];
+        if (const auto fenceResult = vkWaitForFences(device, 1, &submissionContext.InFlightFence, VK_TRUE, UINT64_MAX);
+            fenceResult != VK_SUCCESS) {
+            spdlog::error("Failed to wait for fence in BeginFrame. Error: {}", static_cast<int>(fenceResult));
+            return RHIFrameContext::Null();
+        }
+
+        vkResetFences(device, 1, &submissionContext.InFlightFence);
+
+        uint32_t imageIndex;
+
+        if (const auto result = vkAcquireNextImageKHR(device,
+                                                      swapchain,
+                                                      UINT64_MAX,
+                                                      submissionContext.AcquireImageSemaphore,
+                                                      VK_NULL_HANDLE,
+                                                      &imageIndex);
+            result != VK_SUCCESS) {
+            spdlog::error("Failed to acquire next image in BeginFrame. Error: {}", static_cast<int>(result));
+            return RHIFrameContext::Null();
+        }
+
+        const auto commandBuffer = commandBufferResourcePool.Get(submissionContext.CommandBuffer);
+
+        VkCommandBufferBeginInfo VkCommandBufferBeginInfo {
+            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+            .pNext = nullptr,
+            .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+            .pInheritanceInfo = nullptr,
+        };
+
+        if (const auto result = vkBeginCommandBuffer(*commandBuffer, &VkCommandBufferBeginInfo); result != VK_SUCCESS) {
+            spdlog::error("Failed to begin command buffer in BeginFrame. Error: {}", static_cast<int>(result));
+            return RHIFrameContext::Null();
+        }
+
+        auto frameContext = BuildFrameContext(submissionContext.CommandBuffer,
+                                              swapchainTextureHandles[imageIndex],
+                                              imageIndex,
+                                              currentFrame);
+        TextureResourceBarrier(frameContext,
+                               TextureBarrierDescriptor {
+                                   .Texture = swapchainTextureHandles[imageIndex],
+                                   .OldLayout = TextureLayout::Undefined,
+                                   .NewLayout = TextureLayout::ColorAttachment,
+                                   .SrcStage = PipelineStage::ColorAttachmentOutput,
+                                   .DstStage = PipelineStage::ColorAttachmentOutput,
+                                   .SrcAccess = Access::None,
+                                   .DstAccess = Access::ColorAttachmentWrite,
+                               });
+
+        return std::move(frameContext);
+    }
+
+    void RHIDeviceVulkan::SubmitAndPresentFrame(RHIFrameContext&& frameContext) {
+        // Prepare swapchain image for presentation
+        const auto imageIndex = GetImageIndexFromFrameContext(frameContext);
+
+        TextureResourceBarrier(frameContext,
+                               TextureBarrierDescriptor {
+                                   .Texture = swapchainTextureHandles[imageIndex],
+                                   .OldLayout = TextureLayout::ColorAttachment,
+                                   .NewLayout = TextureLayout::Present,
+                                   .SrcStage = PipelineStage::ColorAttachmentOutput,
+                                   .DstStage = PipelineStage::None,
+                                   .SrcAccess = Access::ColorAttachmentWrite,
+                                   .DstAccess = Access::None,
+                               });
+
+        auto commandBuffer = commandBufferResourcePool.Get(frameContext.GetCommandBuffer());
+        if (const auto result = vkEndCommandBuffer(*commandBuffer); result != VK_SUCCESS) {
+            spdlog::error("Failed to end command buffer in SubmitFrame. Error: {}", static_cast<int>(result));
+            return;
+        }
+
+        const auto frameNumber = GetFrameNumberFromFrameContext(frameContext);
+        auto& submissionContext = submissionContexts[frameNumber];
+        VkPipelineStageFlags waitFlags {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
+        VkSubmitInfo submitInfo {
+            .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+            .pNext = nullptr,
+            .waitSemaphoreCount = 1,
+            .pWaitSemaphores = &submissionContext.AcquireImageSemaphore,
+            .pWaitDstStageMask = &waitFlags,
+            .commandBufferCount = 1,
+            .pCommandBuffers = commandBuffer,
+            .signalSemaphoreCount = 1,
+            .pSignalSemaphores = &presentCompleteSemaphores[imageIndex],
+        };
+
+        if (const auto result = vkQueueSubmit(graphicsQueue, 1, &submitInfo, submissionContext.InFlightFence)) {
+            spdlog::error("Failed to submit command buffer in SubmitFrame. Error: {} | {} / {} | {:x}",
+                          static_cast<int>(result),
+                          imageIndex,
+                          frameNumber,
+                          reinterpret_cast<uint64_t>(presentCompleteSemaphores[imageIndex]));
+            return;
+        }
+
+        VkPresentInfoKHR presentInfo {
+            .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
+            .pNext = nullptr,
+            .waitSemaphoreCount = 1,
+            .pWaitSemaphores = &presentCompleteSemaphores[imageIndex],
+            .swapchainCount = 1,
+            .pSwapchains = &swapchain,
+            .pImageIndices = &imageIndex,
+            .pResults = VK_NULL_HANDLE,
+        };
+
+        if (const auto result = vkQueuePresentKHR(graphicsQueue, &presentInfo); result != VK_SUCCESS) {
+            spdlog::error("Failed to present frame in SubmitFrame. Error: {}", static_cast<int>(result));
+        }
+
+        currentFrame = (currentFrame + 1) % framesInFlight;
+    }
+
+    // ============================================================
+    // === Command Buffer Recording - Render Pass ===
+    // ============================================================
+
+    void RHIDeviceVulkan::BeginRenderPass(const RHIFrameContext& frameContext,
+                                          const RenderPassDescriptor& renderPassDescriptor) {
+        beginRenderPassInternal(*commandBufferResourcePool.Get(frameContext.GetCommandBuffer()), renderPassDescriptor);
+    }
+
+    void RHIDeviceVulkan::beginRenderPassInternal(VkCommandBuffer cmd,
+                                                  const RenderPassDescriptor& renderPassDescriptor) {
+        std::vector<VkRenderingAttachmentInfo> colorAttachments;
+        bool bHasDepthStencilAttachment = false;
+        VkRenderingAttachmentInfo depthStencilAttachment;
+
+        for (auto i = 0u; i < renderPassDescriptor.ColorAttachmentCount; i++) {
+            const auto& attachment = renderPassDescriptor.ColorAttachments[i];
+            if (attachment.Texture == RHITextureHandle::Null()) {
+                spdlog::error("Color attachment {} is null in BeginRenderPass", i);
+                continue;
+            }
+            VkClearValue clearValue;
+            const auto* texture = texturePool.Get(attachment.Texture);
+            if (attachment.Layout == TextureLayout::ColorAttachment) {
+                clearValue.color = {
+                    attachment.Clear.R,
+                    attachment.Clear.G,
+                    attachment.Clear.B,
+                    attachment.Clear.A,
+                };
+            }
+            if (attachment.Layout == TextureLayout::DepthStencilAttachment) {
+                clearValue = VkClearValue {
+                    .depthStencil =
+                        {
+                            .depth = attachment.Clear.Depth,
+                            .stencil = attachment.Clear.Stencil,
+                        },
+                };
+            }
+
+            VkRenderingAttachmentInfo attachmentInfo {
+                .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+                .pNext = nullptr,
+                .imageView = texture->ImageView,
+                .imageLayout = ConvertTextureLayoutToVulkan(attachment.Layout),
+                .loadOp = ConvertLoadOpToVulkan(attachment.Load),
+                .storeOp = ConvertStoreOpToVulkan(attachment.Store),
+                .clearValue = clearValue,
+            };
+
+            if (attachment.Layout == TextureLayout::DepthStencilAttachment) {
+                // TODO: implement this when needed
+                // bHasDepthStencilAttachment = true;
+                // depthStencilAttachment = attachmentInfo;
+                // depthStencilAttachment.imageLayout =
+                //     ConvertTextureLayoutToVulkan(TextureLayout::DepthStencilAttachment);
+                // depthStencilAttachment.loadOp = ConvertLoadOpToVulkan(attachment.Load);
+                // depthStencilAttachment.storeOp = ConvertStoreOpToVulkan(attachment.Store);
+                assert(false && "Depth stencil attachments not implemented!!");
+            } else {
+                colorAttachments.emplace_back(attachmentInfo);
+            }
+        }
+
+        VkRenderingInfo renderingInfo {
+            .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .renderArea =
+                {
+                    .offset =
+                        {
+                            .x = renderPassDescriptor.RenderArea.X,
+                            .y = renderPassDescriptor.RenderArea.Y,
+                        },
+                    .extent =
+                        {
+                            .width = renderPassDescriptor.RenderArea.Width,
+                            .height = renderPassDescriptor.RenderArea.Height,
+                        },
+                },
+            .layerCount = 1,
+            .colorAttachmentCount = static_cast<uint32_t>(colorAttachments.size()),
+            .pColorAttachments = colorAttachments.data(),
+            .pDepthAttachment = bHasDepthStencilAttachment ? &depthStencilAttachment : nullptr,
+            .pStencilAttachment = bHasDepthStencilAttachment ? &depthStencilAttachment : nullptr,
+        };
+
+        vkCmdBeginRendering(cmd, &renderingInfo);
+    }
+
+    void RHIDeviceVulkan::EndRenderPass(const RHIFrameContext& frameContext) {
+        endRenderPassInternal(*commandBufferResourcePool.Get(frameContext.GetCommandBuffer()));
+    }
+
+    void RHIDeviceVulkan::endRenderPassInternal(VkCommandBuffer cmd) {
+        vkCmdEndRendering(cmd);
+    }
+
+    // ============================================================
+    // === Command Buffer Recording - Barriers ===
+    // ============================================================
+
+    void RHIDeviceVulkan::TextureResourceBarrier(const RHIFrameContext& frameContext,
+                                                 const TextureBarrierDescriptor& barrierDescriptor) {
+        textureResourceBarrierInternal(*commandBufferResourcePool.Get(frameContext.GetCommandBuffer()),
+                                       barrierDescriptor);
+    }
+
+    void RHIDeviceVulkan::textureResourceBarrierInternal(VkCommandBuffer cmd,
+                                                         const TextureBarrierDescriptor& barrierDescriptor) {
+        VkImageMemoryBarrier2 imageMemoryBarrier {
+            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+            .pNext = nullptr,
+            .srcStageMask = ConvertPipelineStageToVulkan(barrierDescriptor.SrcStage),
+            .srcAccessMask = ConvertAccessToVulkan(barrierDescriptor.SrcAccess),
+            .dstStageMask = ConvertPipelineStageToVulkan(barrierDescriptor.DstStage),
+            .dstAccessMask = ConvertAccessToVulkan(barrierDescriptor.DstAccess),
+            .oldLayout = ConvertTextureLayoutToVulkan(barrierDescriptor.OldLayout),
+            .newLayout = ConvertTextureLayoutToVulkan(barrierDescriptor.NewLayout),
+            .srcQueueFamilyIndex = barrierDescriptor.SrcQueueFamily == QueueFamilyIgnored
+                                       ? VK_QUEUE_FAMILY_IGNORED
+                                       : static_cast<uint32_t>(barrierDescriptor.SrcQueueFamily),
+            .dstQueueFamilyIndex = barrierDescriptor.DstQueueFamily == QueueFamilyIgnored
+                                       ? VK_QUEUE_FAMILY_IGNORED
+                                       : static_cast<uint32_t>(barrierDescriptor.DstQueueFamily),
+            .image = texturePool.Get(barrierDescriptor.Texture)->Image,
+            .subresourceRange =
+                {
+                    .aspectMask = ConvertTextureAspectToVulkan(barrierDescriptor.SubresourceRange.Aspect),
+                    .baseMipLevel = barrierDescriptor.SubresourceRange.BaseMipLevel,
+                    .levelCount = barrierDescriptor.SubresourceRange.LevelCount,
+                    .baseArrayLayer = barrierDescriptor.SubresourceRange.BaseArrayLayer,
+                    .layerCount = barrierDescriptor.SubresourceRange.LayerCount,
+                },
+        };
+        VkDependencyInfo barrierDependency {
+            .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+            .pNext = nullptr,
+            .dependencyFlags = 0,
+            .memoryBarrierCount = 0,
+            .pMemoryBarriers = nullptr,
+            .bufferMemoryBarrierCount = 0,
+            .pBufferMemoryBarriers = nullptr,
+            .imageMemoryBarrierCount = 1,
+            .pImageMemoryBarriers = &imageMemoryBarrier, // to be filled out based on the TextureBarrierDescriptor
+        };
+
+        vkCmdPipelineBarrier2(cmd, &barrierDependency);
+    }
+
+    void RHIDeviceVulkan::BufferMemoryBarrier(const RHIFrameContext& frameContext,
+                                              const BufferBarrierDescriptor& barrierDescriptor) {
+        bufferMemoryBarrierInternal(*commandBufferResourcePool.Get(frameContext.GetCommandBuffer()), barrierDescriptor);
+    }
+
+    void RHIDeviceVulkan::bufferMemoryBarrierInternal(VkCommandBuffer /*cmd*/,
+                                                      const BufferBarrierDescriptor& /*barrierDescriptor*/) {
+        assert(false && "Buffer memory barriers not implemented!!");
+    }
+
+    // ============================================================
+    // === Command Buffer Recording - State ===
+    // ============================================================
+
+    void RHIDeviceVulkan::SetViewport(const RHIFrameContext& frameContext, const Viewport& viewport) {
+        setViewportInternal(*commandBufferResourcePool.Get(frameContext.GetCommandBuffer()), viewport);
+    }
+
+    void RHIDeviceVulkan::setViewportInternal(VkCommandBuffer cmd, const Viewport& viewport) {
+        VkViewport vkViewport {
+            .x = viewport.X,
+            .y = viewport.Y,
+            .width = viewport.Width,
+            .height = viewport.Height,
+            .minDepth = viewport.MinDepth,
+            .maxDepth = viewport.MaxDepth,
+        };
+        vkCmdSetViewportWithCount(cmd, 1, &vkViewport);
+    }
+
+    void RHIDeviceVulkan::SetScissor(const RHIFrameContext& frameContext, const Scissor& scissor) {
+        setScissorInternal(*commandBufferResourcePool.Get(frameContext.GetCommandBuffer()), scissor);
+    }
+
+    void RHIDeviceVulkan::setScissorInternal(VkCommandBuffer cmd, const Scissor& scissor) {
+        VkRect2D vkScissor {
+            .offset =
+                {
+                    .x = scissor.X,
+                    .y = scissor.Y,
+                },
+            .extent =
+                {
+                    .width = scissor.Width,
+                    .height = scissor.Height,
+                },
+        };
+        vkCmdSetScissorWithCount(cmd, 1, &vkScissor);
+    }
+
+    void RHIDeviceVulkan::SetGraphicsState(const RHIFrameContext& frameContext,
+                                           const GraphicsStateDescriptor& graphicsStateDescriptor) {
+        setGraphicsStateInternal(*commandBufferResourcePool.Get(frameContext.GetCommandBuffer()),
+                                 graphicsStateDescriptor);
+    }
+
+    void RHIDeviceVulkan::setGraphicsStateInternal(VkCommandBuffer cmd,
+                                                   const GraphicsStateDescriptor& graphicsStateDescriptor) {
+        // Input Assembly
+        vkCmdSetPrimitiveTopology(cmd,
+                                  ConvertPrimitiveTopologyToVulkan(graphicsStateDescriptor.InputAssembly.Topology));
+        vkCmdSetPrimitiveRestartEnable(cmd, graphicsStateDescriptor.InputAssembly.PrimitiveRestartEnable);
+
+        // Rasterization
+        vkCmdSetCullMode(cmd, ConvertCullModeToVulkan(graphicsStateDescriptor.Rasterization.Cull));
+        vkCmdSetFrontFace(cmd, ConvertFrontFaceToVulkan(graphicsStateDescriptor.Rasterization.Front));
+        vkCmdSetPolygonModeEXT(cmd, ConvertPolygonModeToVulkan(graphicsStateDescriptor.Rasterization.Polygon));
+        vkCmdSetDepthBiasEnable(cmd, graphicsStateDescriptor.Rasterization.DepthBiasEnable);
+        vkCmdSetRasterizerDiscardEnable(cmd, graphicsStateDescriptor.Rasterization.RasterizerDiscard);
+
+        // Depth / Stencil
+        vkCmdSetDepthTestEnable(cmd, graphicsStateDescriptor.DepthStencil.DepthTestEnable);
+        vkCmdSetDepthWriteEnable(cmd, graphicsStateDescriptor.DepthStencil.DepthWriteEnable);
+        vkCmdSetStencilTestEnable(cmd, graphicsStateDescriptor.DepthStencil.StencilTestEnable);
+
+        // Multisample
+        const VkSampleCountFlagBits sampleCount =
+            ConvertSampleCountToVulkan(graphicsStateDescriptor.Multisample.Samples);
+        const VkSampleMask sampleMask = graphicsStateDescriptor.Multisample.SampleMask;
+        vkCmdSetRasterizationSamplesEXT(cmd, sampleCount);
+        vkCmdSetSampleMaskEXT(cmd, sampleCount, &sampleMask);
+        vkCmdSetAlphaToCoverageEnableEXT(cmd, graphicsStateDescriptor.Multisample.AlphaToCoverageEnable);
+
+        // Color Blend
+        if (graphicsStateDescriptor.ColorBlendAttachmentCount > 0) {
+            VkBool32 blendEnables[MaxBlendAttachments];
+            VkColorComponentFlags colorWriteMasks[MaxBlendAttachments];
+            for (uint32_t i = 0; i < graphicsStateDescriptor.ColorBlendAttachmentCount; ++i) {
+                blendEnables[i] = graphicsStateDescriptor.ColorBlend[i].BlendEnable;
+                colorWriteMasks[i] =
+                    ConvertColorComponentFlagsToVulkan(graphicsStateDescriptor.ColorBlend[i].ColorWriteMask);
+            }
+            vkCmdSetColorBlendEnableEXT(cmd, 0, graphicsStateDescriptor.ColorBlendAttachmentCount, blendEnables);
+            vkCmdSetColorWriteMaskEXT(cmd, 0, graphicsStateDescriptor.ColorBlendAttachmentCount, colorWriteMasks);
+        }
+
+        // Vertex Input
+        VkVertexInputBindingDescription2EXT bindings[MaxVertexBindings];
+        for (uint32_t i = 0; i < graphicsStateDescriptor.VertexInput.BindingCount; ++i) {
+            const auto& src = graphicsStateDescriptor.VertexInput.Bindings[i];
+            bindings[i] = {
+                .sType = VK_STRUCTURE_TYPE_VERTEX_INPUT_BINDING_DESCRIPTION_2_EXT,
+                .pNext = nullptr,
+                .binding = src.Binding,
+                .stride = src.Stride,
+                .inputRate = ConvertVertexInputRateToVulkan(src.InputRate),
+                .divisor = 1,
+            };
+        }
+        VkVertexInputAttributeDescription2EXT attributes[MaxVertexAttributes];
+        for (uint32_t i = 0; i < graphicsStateDescriptor.VertexInput.AttributeCount; ++i) {
+            const auto& src = graphicsStateDescriptor.VertexInput.Attributes[i];
+            attributes[i] = {
+                .sType = VK_STRUCTURE_TYPE_VERTEX_INPUT_ATTRIBUTE_DESCRIPTION_2_EXT,
+                .pNext = nullptr,
+                .location = src.Location,
+                .binding = src.Binding,
+                .format = ConvertVertexFormatToVulkan(src.Format),
+                .offset = src.Offset,
+            };
+        }
+        vkCmdSetVertexInputEXT(cmd,
+                               graphicsStateDescriptor.VertexInput.BindingCount,
+                               bindings,
+                               graphicsStateDescriptor.VertexInput.AttributeCount,
+                               attributes);
+    }
+
+    // ============================================================
+    // === Command Buffer Recording - Binding ===
+    // ============================================================
+
+    void RHIDeviceVulkan::BindShader(const RHIFrameContext& frameContext, const RHIShaderHandle& shaderHandle) {
+        bindShaderInternal(*commandBufferResourcePool.Get(frameContext.GetCommandBuffer()), shaderHandle);
+    }
+
+    void RHIDeviceVulkan::bindShaderInternal(VkCommandBuffer cmd, const RHIShaderHandle& shaderHandle) {
+        if (const auto* shader = shaderResourcePool.Get(shaderHandle)) {
+            shader->Bind(device, cmd);
+        }
+    }
+
+    void RHIDeviceVulkan::BindBuffer(const RHIFrameContext& frameContext, RHIBufferHandle& bufferHandle) {
+        bindBufferInternal(*commandBufferResourcePool.Get(frameContext.GetCommandBuffer()),
+                           bufferHandle,
+                           GetFrameNumberFromFrameContext(frameContext));
+    }
+
+    void RHIDeviceVulkan::bindBufferInternal(VkCommandBuffer cmd, RHIBufferHandle& bufferHandle, uint32_t frameIndex) {
+        const auto buffers = bufferResourcePool.Get(bufferHandle);
+        if (!buffers) {
+            spdlog::error("Failed to bind buffer. Buffer handle is invalid.");
+            return;
+        }
+
+        const auto buffer = (*buffers)[frameIndex];
+
+        if (has(buffer.Usage, BufferUsage::VertexBuffer)) {
+            vkCmdBindVertexBuffers2(cmd, 0, 1, &buffer.Buffer, (VkDeviceSize[]) {0}, nullptr, nullptr);
+            return;
+        }
+
+        if (has(buffer.Usage, BufferUsage::IndexBuffer)) {
+            vkCmdBindIndexBuffer(cmd, buffer.Buffer, 0, VK_INDEX_TYPE_UINT32);
+            return;
+        }
+        assert(false && "Buffer type not implemented.");
+    }
+
+    void RHIDeviceVulkan::SetPushConstants(const RHIFrameContext& frameContext,
+                                           RHIPipelineLayoutHandle pipelineLayoutHandle,
+                                           ShaderStageFlags stageFlags,
+                                           uint32_t offset,
+                                           uint32_t size,
+                                           const void* data) {
+        setPushConstantsInternal(*commandBufferResourcePool.Get(frameContext.GetCommandBuffer()),
+                                 pipelineLayoutHandle,
+                                 stageFlags,
+                                 offset,
+                                 size,
+                                 data);
+    }
+
+    void RHIDeviceVulkan::setPushConstantsInternal(VkCommandBuffer cmd,
+                                                   RHIPipelineLayoutHandle pipelineLayoutHandle,
+                                                   ShaderStageFlags stageFlags,
+                                                   uint32_t offset,
+                                                   uint32_t size,
+                                                   const void* data) {
+        const auto* layout = pipelineLayoutResourcePool.Get(pipelineLayoutHandle);
+        if (!layout) {
+            spdlog::error("SetPushConstants: invalid command buffer or pipeline layout handle");
+            return;
+        }
+        vkCmdPushConstants(cmd, *layout, ConvertShaderStageFlagsToVulkan(stageFlags), offset, size, data);
+    }
+
+    void RHIDeviceVulkan::BindDescriptorSet(const RHIFrameContext& frameContext,
+                                            RHIPipelineLayoutHandle pipelineLayoutHandle,
+                                            uint32_t setIndex,
+                                            RHIDescriptorSetHandle descriptorSetHandle) {
+        bindDescriptorSetInternal(*commandBufferResourcePool.Get(frameContext.GetCommandBuffer()),
+                                  pipelineLayoutHandle,
+                                  setIndex,
+                                  descriptorSetHandle);
+    }
+
+    void RHIDeviceVulkan::bindDescriptorSetInternal(VkCommandBuffer cmd,
+                                                    RHIPipelineLayoutHandle pipelineLayoutHandle,
+                                                    uint32_t setIndex,
+                                                    RHIDescriptorSetHandle descriptorSetHandle) {
+        const auto* layout = pipelineLayoutResourcePool.Get(pipelineLayoutHandle);
+        const auto* set = descriptorSetResourcePool.Get(descriptorSetHandle);
+        if (!layout || !set) {
+            spdlog::error("BindDescriptorSet: invalid handle(s)");
+            return;
+        }
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, *layout, setIndex, 1, set, 0, nullptr);
+    }
+
+    // ============================================================
+    // === Command Buffer Recording - Draw ===
+    // ============================================================
+
+    void RHIDeviceVulkan::Draw(const RHIFrameContext& frameContext,
+                               const uint32_t vertexCount,
+                               const uint32_t instanceCount,
+                               const uint32_t firstVertex,
+                               const uint32_t firstInstance) {
+        drawInternal(*commandBufferResourcePool.Get(frameContext.GetCommandBuffer()),
+                     vertexCount,
+                     instanceCount,
+                     firstVertex,
+                     firstInstance);
+    }
+
+    void RHIDeviceVulkan::drawInternal(VkCommandBuffer cmd,
+                                       uint32_t vertexCount,
+                                       uint32_t instanceCount,
+                                       uint32_t firstVertex,
+                                       uint32_t firstInstance) {
+        vkCmdDraw(cmd, vertexCount, instanceCount, firstVertex, firstInstance);
+    }
+
+    void RHIDeviceVulkan::DrawIndexed(const RHIFrameContext& frameContext,
+                                      uint32_t indexCount,
+                                      uint32_t instanceCount,
+                                      uint32_t firstIndex,
+                                      int32_t vertexOffset,
+                                      uint32_t firstInstance) {
+        drawIndexedInternal(*commandBufferResourcePool.Get(frameContext.GetCommandBuffer()),
+                            indexCount,
+                            instanceCount,
+                            firstIndex,
+                            vertexOffset,
+                            firstInstance);
+    }
+
+    void RHIDeviceVulkan::drawIndexedInternal(VkCommandBuffer cmd,
+                                              uint32_t indexCount,
+                                              uint32_t instanceCount,
+                                              uint32_t firstIndex,
+                                              int32_t vertexOffset,
+                                              uint32_t firstInstance) {
+        vkCmdDrawIndexed(cmd, indexCount, instanceCount, firstIndex, vertexOffset, firstInstance);
+    }
+
+    // ============================================================
+    // === Descriptor Sets ===
+    // ============================================================
+
+    RHIDescriptorSetHandle RHIDeviceVulkan::CreateDescriptorSet(RHIDescriptorSetLayoutHandle layoutHandle) {
+        const auto* layout = descriptorSetLayoutResourcePool.Get(layoutHandle);
+        if (!layout) {
+            spdlog::error("CreateDescriptorSet: invalid descriptor set layout handle");
+            return RHIDescriptorSetHandle::Null();
+        }
+
+        VkDescriptorSetAllocateInfo allocInfo {
+            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+            .descriptorPool = descriptorPool,
+            .descriptorSetCount = 1,
+            .pSetLayouts = layout,
+        };
+
+        VkDescriptorSet set {VK_NULL_HANDLE};
+        if (const auto result = vkAllocateDescriptorSets(device, &allocInfo, &set); result != VK_SUCCESS) {
+            spdlog::error("Failed to allocate descriptor set. Error: {}", static_cast<int>(result));
+            return RHIDescriptorSetHandle::Null();
+        }
+
+        return descriptorSetResourcePool.Allocate(std::move(set));
+    }
+
+    void RHIDeviceVulkan::UpdateDescriptorSet(RHIDescriptorSetHandle handle,
+                                              std::span<const RHIDescriptorWrite> writes) {
+        const auto* set = descriptorSetResourcePool.Get(handle);
+        if (!set) {
+            spdlog::error("UpdateDescriptorSet: invalid descriptor set handle");
+            return;
+        }
+
+        std::vector<VkWriteDescriptorSet> vkWrites;
+        vkWrites.reserve(writes.size());
+
+        // Storage for descriptor infos (must outlive vkUpdateDescriptorSets)
+        std::vector<VkDescriptorBufferInfo> bufferInfos;
+        bufferInfos.reserve(writes.size());
+
+        for (const auto& write : writes) {
+            VkWriteDescriptorSet vkWrite {
+                .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .dstSet = *set,
+                .dstBinding = write.Binding,
+                .dstArrayElement = 0,
+                .descriptorCount = 1,
+                .descriptorType = ConvertDescriptorTypeToVulkan(write.Type),
+            };
+
+            if (write.Type == DescriptorType::UniformBuffer || write.Type == DescriptorType::StorageBuffer) {
+                const auto* buffers = bufferResourcePool.Get(write.Buffer.Buffer);
+                if (!buffers) {
+                    spdlog::error("UpdateDescriptorSet: invalid buffer handle at binding {}", write.Binding);
+                    continue;
+                }
+                bufferInfos.push_back({
+                    .buffer = (*buffers)[0].Buffer,
+                    .offset = write.Buffer.Offset,
+                    .range = write.Buffer.Range,
+                });
+                vkWrite.pBufferInfo = &bufferInfos.back();
+            } else {
+                spdlog::error("UpdateDescriptorSet: descriptor type {} not yet implemented",
+                              static_cast<int>(write.Type));
+                continue;
+            }
+
+            vkWrites.push_back(vkWrite);
+        }
+
+        vkUpdateDescriptorSets(device, static_cast<uint32_t>(vkWrites.size()), vkWrites.data(), 0, nullptr);
+    }
+
+    void RHIDeviceVulkan::FreeDescriptorSet(RHIDescriptorSetHandle handle) {
+        descriptorSetResourcePool.Free(handle);
+    }
+
+    // ============================================================
+    // === Resource Creation ===
+    // ============================================================
+
+    RHITextureHandle RHIDeviceVulkan::CreateTexture() {
+        return RHITextureHandle::Null();
+    }
+
+    RHIShaderHandle RHIDeviceVulkan::CreateShader(ShaderFileParams&& shaderFiles) {
+        std::ifstream vertexFile(shaderFiles.Vertex);
+        std::ifstream fragmentFile(shaderFiles.Fragment);
+
+        if (!vertexFile.is_open() || !fragmentFile.is_open()) {
+            spdlog::error("Failed to open shader files");
+            return RHIShaderHandle::Null();
+        }
+
+        std::string vertexSource((std::istreambuf_iterator<char>(vertexFile)), std::istreambuf_iterator<char>());
+        std::string fragmentSource((std::istreambuf_iterator<char>(fragmentFile)), std::istreambuf_iterator<char>());
+        std::string geometrySource;
+
+        if (!shaderFiles.Geometry.empty()) {
+            std::ifstream geometryFile(shaderFiles.Geometry);
+            geometrySource =
+                std::string((std::istreambuf_iterator<char>(geometryFile)), std::istreambuf_iterator<char>());
+        }
+
+        return CreateShader(ShaderSourceParams {
+            .Vertex = vertexSource,
+            .Geometry = geometrySource,
+            .Fragment = fragmentSource,
+        });
+    }
+
+    RHIShaderHandle RHIDeviceVulkan::CreateShader(ShaderSourceParams&& shaderSources) {
+        RHIShaderVulkan shader {device, std::move(shaderSources)};
+        if (!shader.IsCompiled()) {
+            spdlog::error("Failed to compile shader. Aborting.");
+            return RHIShaderHandle::Null();
+        }
+
+        // Build pipeline layout + descriptor set layouts from reflection
+        auto layoutDesc = shader.GetPipelineLayoutDescriptor();
+        auto [pipelineLayoutHandle, dsLayoutHandles] = CreatePipelineLayout(layoutDesc);
+        if (!pipelineLayoutHandle.IsValid()) {
+            return RHIShaderHandle::Null();
+        }
+
+        // Gather VkDescriptorSetLayout objects (ordered by set index = pool allocation order)
+        std::vector<VkDescriptorSetLayout> vkDsLayouts;
+        vkDsLayouts.reserve(dsLayoutHandles.size());
+        for (const auto& handle : dsLayoutHandles) {
+            vkDsLayouts.push_back(*descriptorSetLayoutResourcePool.Get(handle));
+        }
+
+        // Gather VkPushConstantRange objects
+        std::vector<VkPushConstantRange> vkPushConstants;
+        for (uint32_t i = 0; i < layoutDesc.PushConstantCount; i++) {
+            vkPushConstants.push_back({
+                .stageFlags = ConvertShaderStageFlagsToVulkan(layoutDesc.PushConstants[i].StageFlags),
+                .offset = layoutDesc.PushConstants[i].Offset,
+                .size = layoutDesc.PushConstants[i].Size,
+            });
+        }
+
+        if (!shader.CreateVkShaders(device, vkDsLayouts, vkPushConstants)) {
+            pipelineLayoutResourcePool.Free(pipelineLayoutHandle);
+            for (const auto& handle : dsLayoutHandles) {
+                descriptorSetLayoutResourcePool.Free(handle);
+            }
+            return RHIShaderHandle::Null();
+        }
+
+        shader.pipelineLayoutHandle = pipelineLayoutHandle;
+        shader.descriptorSetLayoutHandles =
+            std::vector<RHIDescriptorSetLayoutHandle>(dsLayoutHandles.begin(), dsLayoutHandles.end());
+
+        return shaderResourcePool.Allocate(std::move(shader));
+    }
+
+    RHIPipelineLayoutDescriptor RHIDeviceVulkan::GetShaderPipelineLayout(const RHIShaderHandle& shaderHandle) {
+        const auto* shader = shaderResourcePool.Get(shaderHandle);
+        if (!shader) {
+            spdlog::error("Failed to get shader pipeline layout. Shader handle is invalid.");
+            return {};
+        }
+        return shader->GetPipelineLayoutDescriptor();
+    }
+
+    RHIPipelineLayoutHandle RHIDeviceVulkan::GetShaderPipelineLayoutHandle(const RHIShaderHandle& shaderHandle) {
+        const auto* shader = shaderResourcePool.Get(shaderHandle);
+        if (!shader) {
+            spdlog::error("GetShaderPipelineLayoutHandle: invalid shader handle");
+            return RHIPipelineLayoutHandle::Null();
+        }
+        return shader->pipelineLayoutHandle;
+    }
+
+    std::vector<RHIDescriptorSetLayoutHandle>
+    RHIDeviceVulkan::GetShaderDescriptorSetLayoutHandles(const RHIShaderHandle& shaderHandle) {
+        const auto* shader = shaderResourcePool.Get(shaderHandle);
+        if (!shader) {
+            spdlog::error("GetShaderDescriptorSetLayoutHandles: invalid shader handle");
+            return {};
+        }
+        return shader->descriptorSetLayoutHandles;
+    }
+
+    std::pair<RHIPipelineLayoutHandle, std::set<RHIDescriptorSetLayoutHandle>>
+    RHIDeviceVulkan::CreatePipelineLayout(const RHIPipelineLayoutDescriptor& pipelineLayoutDescriptor) {
+        std::set<RHIDescriptorSetLayoutHandle> descriptorSetLayoutHandles;
+        RHIPipelineLayoutHandle pipelineLayoutHandle {RHIPipelineLayoutHandle::Null()};
+        auto cleanOnFailure = [&]() {
+            // TODO: do this!
+            for (const auto& handle : descriptorSetLayoutHandles) {
+                descriptorSetLayoutResourcePool.Free(handle);
+            }
+        };
+
+        for (auto i = 0U; i < pipelineLayoutDescriptor.SetCount; i++) {
+            auto descriptorSetLayoutHandle = CreateDescriptorSetLayout(pipelineLayoutDescriptor.Sets[i]);
+            if (descriptorSetLayoutHandle == RHIDescriptorSetLayoutHandle::Null()) {
+                spdlog::error("Failed to create pipeline layout. Aborting process. See logs for details.");
+                cleanOnFailure();
+                return {RHIPipelineLayoutHandle::Null(), {}};
+            }
+            descriptorSetLayoutHandles.insert(descriptorSetLayoutHandle);
+        }
+        std::vector<VkDescriptorSetLayout> descriptorSetLayouts;
+        descriptorSetLayouts.reserve(descriptorSetLayoutHandles.size());
+        std::ranges::transform(descriptorSetLayoutHandles,
+                               std::back_inserter(descriptorSetLayouts),
+                               [this](const RHIDescriptorSetLayoutHandle& handle) {
+                                   return *descriptorSetLayoutResourcePool.Get(handle);
+                               });
+
+        std::vector<VkPushConstantRange> pushConstantRanges {pipelineLayoutDescriptor.PushConstantCount};
+
+        for (auto i = 0U; i < pipelineLayoutDescriptor.PushConstantCount; i++) {
+            const auto& src = pipelineLayoutDescriptor.PushConstants[i];
+            pushConstantRanges[i] = {
+                .stageFlags = ConvertShaderStageFlagsToVulkan(src.StageFlags),
+                .offset = src.Offset,
+                .size = src.Size,
+            };
+        }
+
+        VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .setLayoutCount = static_cast<uint32_t>(descriptorSetLayouts.size()),
+            .pSetLayouts = descriptorSetLayouts.data(),
+            .pushConstantRangeCount = static_cast<uint32_t>(pushConstantRanges.size()),
+            .pPushConstantRanges = pushConstantRanges.data()};
+
+        VkPipelineLayout pipelineLayout;
+        if (const auto result = vkCreatePipelineLayout(device, &pipelineLayoutCreateInfo, nullptr, &pipelineLayout);
+            result != VK_SUCCESS) {
+            spdlog::error("Failed to create pipeline layout. Error: {}", static_cast<int>(result));
+            cleanOnFailure();
+            return {RHIPipelineLayoutHandle::Null(), {}};
+        };
+        pipelineLayoutHandle = pipelineLayoutResourcePool.Allocate(std::move(pipelineLayout));
+        return {pipelineLayoutHandle, descriptorSetLayoutHandles};
+    }
+
+    RHIDescriptorSetLayoutHandle
+    RHIDeviceVulkan::CreateDescriptorSetLayout(const RHIDescriptorSetLayoutDescriptor& descriptorSetLayoutDescriptor) {
+        RHIDescriptorSetLayoutHandle handle {RHIDescriptorSetLayoutHandle::Null()};
+        // build up the bindings
+        std::vector<VkDescriptorSetLayoutBinding> bindings {descriptorSetLayoutDescriptor.BindingCount};
+        for (auto i = 0U; i < descriptorSetLayoutDescriptor.BindingCount; i++) {
+            auto& srcBinding = descriptorSetLayoutDescriptor.Bindings[i];
+            bindings[i] = {
+                .binding = srcBinding.Binding,
+                .descriptorType = ConvertDescriptorTypeToVulkan(srcBinding.Type),
+                .descriptorCount = srcBinding.Count,
+                .stageFlags = ConvertShaderStageFlagsToVulkan(srcBinding.StageFlags),
+                .pImmutableSamplers = nullptr, // TODO: support immutable samplers when needed
+            };
+        }
+        VkDescriptorSetLayoutCreateInfo layoutCreateInfo {
+            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .bindingCount = descriptorSetLayoutDescriptor.BindingCount,
+            .pBindings = bindings.data(),
+        };
+
+        VkDescriptorSetLayout layout;
+        if (const auto result = vkCreateDescriptorSetLayout(device, &layoutCreateInfo, nullptr, &layout);
+            result != VK_SUCCESS) {
+            spdlog::error("Failed to create descriptor set layout. Error: {}", static_cast<int>(result));
+            return handle;
+        }
+
+        return descriptorSetLayoutResourcePool.Allocate(std::move(layout));
+    }
+
+    void RHIDeviceVulkan::FreeShader(const RHIShaderHandle& shaderHandle) {
+        shaderResourcePool.Free(shaderHandle);
+    }
+
+    RHIBufferHandle RHIDeviceVulkan::CreateBuffer(BufferDescriptor&& bufferDescriptor) {
+        std::array<RHIBufferVulkan, MaxFramesInFlight> buffers;
+
+        for (auto& buffer : buffers) {
+            VkBufferCreateInfo bufferCreateInfo {
+                .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+                .pNext = nullptr,
+                .flags = 0,
+                .size = bufferDescriptor.Size,
+                .usage = ConvertBufferUsageToVulkan(bufferDescriptor.Usage),
+                .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+                .queueFamilyIndexCount = 0,
+                .pQueueFamilyIndices = nullptr,
+            };
+
+            VmaAllocationCreateInfo allocationCreateInfo {
+                .flags = VMA_ALLOCATION_CREATE_MAPPED_BIT,
+                .usage = ConvertMemoryAccessToVulkan(bufferDescriptor.Access),
+                .requiredFlags = 0,
+                .preferredFlags = 0,
+                .memoryTypeBits = 0,
+                .pool = VK_NULL_HANDLE,
+                .pUserData = nullptr,
+            };
+
+            if (const auto result = vmaCreateBuffer(vmaAllocator,
+                                                    &bufferCreateInfo,
+                                                    &allocationCreateInfo,
+                                                    &buffer.Buffer,
+                                                    &buffer.Allocation,
+                                                    &buffer.AllocationInfo);
+                result != VK_SUCCESS) {
+                spdlog::error("Failed to create buffer. Error: {}", static_cast<int>(result));
+                return RHIBufferHandle::Null();
+            }
+
+            buffer.Access = bufferDescriptor.Access;
+            buffer.Usage = bufferDescriptor.Usage;
+        }
+
+        const auto handle = bufferResourcePool.Allocate(std::move(buffers));
+
+        return handle;
+    }
+
+    void
+    RHIDeviceVulkan::UpdateBuffer(const RHIBufferHandle& bufferHandle, const void* data, size_t size, size_t offset) {
+        const auto buffers = bufferResourcePool.Get(bufferHandle);
+        if (!buffers) {
+            spdlog::error("Failed to update buffer. Buffer handle is invalid.");
+            return;
+        }
+
+        for (const auto& buffer : *buffers) {
+            // ensure usage is CPU accessible
+            if (buffer.Access == BufferMemoryAccess::GpuOnly) {
+                spdlog::error("Failed to update buffer. Buffer is not CPU accessible.");
+                return;
+            }
+
+            // make sure offset + size does not exceed buffer size
+            if (offset + size > buffer.AllocationInfo.size) {
+                spdlog::error("Failed to update buffer. Data size exceeds buffer size.");
+                return;
+            }
+
+            void* mappedData = buffer.AllocationInfo.pMappedData;
+            if (!mappedData) {
+                spdlog::error("Failed to update buffer. Buffer memory is not mapped.");
+                return;
+            }
+            std::memcpy(static_cast<uint8_t*>(mappedData) + offset, data, size);
+            vmaFlushAllocation(vmaAllocator, buffer.Allocation, offset, size);
+        }
+    }
+
 } // namespace OZZ::rendering::vk

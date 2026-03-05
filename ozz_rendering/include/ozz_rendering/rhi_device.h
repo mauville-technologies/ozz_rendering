@@ -94,76 +94,70 @@ namespace OZZ::rendering {
         virtual RHIFrameContext BeginFrame() = 0;
         virtual void SubmitAndPresentFrame(RHIFrameContext&& frameContext) = 0;
 
-        // Render pass
-        virtual void BeginRenderPass(const RHIFrameContext& commandBufferHandle,
+        // Command Buffer Recording - Render Pass
+        virtual void BeginRenderPass(const RHIFrameContext& frameContext,
                                      const RenderPassDescriptor& renderPassDescriptor) = 0;
-        virtual void EndRenderPass(const RHIFrameContext& commandBufferHandle) = 0;
+        virtual void EndRenderPass(const RHIFrameContext& frameContext) = 0;
 
-        // Resource barriers
-        virtual void TextureResourceBarrier(const RHIFrameContext& commandBufferHandle,
+        // Command Buffer Recording - Barriers
+        virtual void TextureResourceBarrier(const RHIFrameContext& frameContext,
                                             const TextureBarrierDescriptor& textureBarrierDescriptor) = 0;
-        virtual void BufferMemoryBarrier(const RHIFrameContext& commandBufferHandle,
+        virtual void BufferMemoryBarrier(const RHIFrameContext& frameContext,
                                          const BufferBarrierDescriptor& bufferBarrierDescriptor) = 0;
 
-        // Viewport / scissor
-        virtual void SetViewport(const RHIFrameContext& commandBufferHandle, const Viewport& viewport) = 0;
-        virtual void SetScissor(const RHIFrameContext& commandBufferHandle, const Scissor& scissor) = 0;
-
-        // Pipeline state
-        virtual void SetGraphicsState(const RHIFrameContext& commandBufferHandle,
+        // Command Buffer Recording - State
+        virtual void SetViewport(const RHIFrameContext& frameContext, const Viewport& viewport) = 0;
+        virtual void SetScissor(const RHIFrameContext& frameContext, const Scissor& scissor) = 0;
+        virtual void SetGraphicsState(const RHIFrameContext& frameContext,
                                       const GraphicsStateDescriptor& graphicsStateDescriptor) = 0;
 
-        // Draw
-        virtual void Draw(const RHIFrameContext&,
+        // Command Buffer Recording - Binding
+        virtual void BindShader(const RHIFrameContext& frameContext, const RHIShaderHandle& shaderHandle) = 0;
+        virtual void BindBuffer(const RHIFrameContext& frameContext, RHIBufferHandle& bufferHandle) = 0;
+        virtual void SetPushConstants(const RHIFrameContext& frameContext,
+                                      RHIPipelineLayoutHandle pipelineLayoutHandle,
+                                      ShaderStageFlags stageFlags,
+                                      uint32_t offset,
+                                      uint32_t size,
+                                      const void* data) = 0;
+        virtual void BindDescriptorSet(const RHIFrameContext& frameContext,
+                                       RHIPipelineLayoutHandle pipelineLayoutHandle,
+                                       uint32_t setIndex,
+                                       RHIDescriptorSetHandle descriptorSetHandle) = 0;
+
+        // Command Buffer Recording - Draw
+        virtual void Draw(const RHIFrameContext& frameContext,
                           uint32_t vertexCount,
                           uint32_t instanceCount,
                           uint32_t firstVertex,
                           uint32_t firstInstance) = 0;
-
-        virtual void DrawIndexed(const RHIFrameContext&,
+        virtual void DrawIndexed(const RHIFrameContext& frameContext,
                                  uint32_t indexCount,
                                  uint32_t instanceCount,
                                  uint32_t firstIndex,
                                  int32_t vertexOffset,
                                  uint32_t firstInstance) = 0;
 
-        virtual void BindShader(const RHIFrameContext& commandBufferHandle, const RHIShaderHandle& shaderHandle) = 0;
-        virtual void BindBuffer(const RHIFrameContext& commandBufferHandle, RHIBufferHandle& bufferHandle) = 0;
-
-        virtual void SetPushConstants(const RHIFrameContext& commandBufferHandle,
-                                      RHIPipelineLayoutHandle pipelineLayoutHandle,
-                                      ShaderStageFlags stageFlags,
-                                      uint32_t offset,
-                                      uint32_t size,
-                                      const void* data) = 0;
-
-        // Descriptor sets
+        // Descriptor Sets
         virtual RHIDescriptorSetHandle CreateDescriptorSet(RHIDescriptorSetLayoutHandle layoutHandle) = 0;
         virtual void UpdateDescriptorSet(RHIDescriptorSetHandle handle,
                                          std::span<const RHIDescriptorWrite> writes) = 0;
-        virtual void BindDescriptorSet(const RHIFrameContext& commandBufferHandle,
-                                       RHIPipelineLayoutHandle pipelineLayoutHandle,
-                                       uint32_t setIndex,
-                                       RHIDescriptorSetHandle descriptorSetHandle) = 0;
         virtual void FreeDescriptorSet(RHIDescriptorSetHandle handle) = 0;
 
-        // Resource creation
+        // Resource Creation
         virtual RHITextureHandle CreateTexture() = 0;
 
         virtual RHIShaderHandle CreateShader(ShaderFileParams&& fileParams) = 0;
         virtual RHIShaderHandle CreateShader(ShaderSourceParams&& sourceParams) = 0;
+        virtual void FreeShader(const RHIShaderHandle& shaderHandle) = 0;
         virtual RHIPipelineLayoutDescriptor GetShaderPipelineLayout(const RHIShaderHandle& shaderHandle) = 0;
         virtual RHIPipelineLayoutHandle GetShaderPipelineLayoutHandle(const RHIShaderHandle& shaderHandle) = 0;
         virtual std::vector<RHIDescriptorSetLayoutHandle>
         GetShaderDescriptorSetLayoutHandles(const RHIShaderHandle& shaderHandle) = 0;
-
         virtual std::pair<RHIPipelineLayoutHandle, std::set<RHIDescriptorSetLayoutHandle>>
         CreatePipelineLayout(const RHIPipelineLayoutDescriptor& pipelineLayoutDescriptor) = 0;
-
         virtual RHIDescriptorSetLayoutHandle
         CreateDescriptorSetLayout(const RHIDescriptorSetLayoutDescriptor& descriptorSetLayoutDescriptor) = 0;
-
-        virtual void FreeShader(const RHIShaderHandle& shaderHandle) = 0;
 
         virtual RHIBufferHandle CreateBuffer(BufferDescriptor&& bufferDescriptor) = 0;
         virtual void UpdateBuffer(const RHIBufferHandle&, const void* data, size_t size, size_t offset) = 0;

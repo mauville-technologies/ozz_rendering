@@ -29,26 +29,25 @@ namespace OZZ::rendering::vk {
         explicit RHIDeviceVulkan(const PlatformContext& context);
         ~RHIDeviceVulkan() override;
 
-        // RHI Commands
-        // We give them a frame context
+        // Frame
         RHIFrameContext BeginFrame() override;
-        // and then take it back
         void SubmitAndPresentFrame(RHIFrameContext&& frameContext) override;
 
+        // Command Buffer Recording - Render Pass
         void BeginRenderPass(const RHIFrameContext& frameContext, const RenderPassDescriptor&) override;
         void EndRenderPass(const RHIFrameContext& frameContext) override;
 
-        // Barriers
+        // Command Buffer Recording - Barriers
         void TextureResourceBarrier(const RHIFrameContext& frameContext, const TextureBarrierDescriptor&) override;
         void BufferMemoryBarrier(const RHIFrameContext& frameContext, const BufferBarrierDescriptor&) override;
 
+        // Command Buffer Recording - State
         void SetViewport(const RHIFrameContext& frameContext, const Viewport&) override;
         void SetScissor(const RHIFrameContext& frameContext, const Scissor&) override;
-
         void SetGraphicsState(const RHIFrameContext& frameContext, const GraphicsStateDescriptor&) override;
 
+        // Command Buffer Recording - Binding
         void BindShader(const RHIFrameContext&, const RHIShaderHandle&) override;
-
         void BindBuffer(const RHIFrameContext& frameContext, RHIBufferHandle& bufferHandle) override;
         void SetPushConstants(const RHIFrameContext& frameContext,
                               RHIPipelineLayoutHandle pipelineLayoutHandle,
@@ -56,23 +55,17 @@ namespace OZZ::rendering::vk {
                               uint32_t offset,
                               uint32_t size,
                               const void* data) override;
-
-        // Descriptor sets
-        RHIDescriptorSetHandle CreateDescriptorSet(RHIDescriptorSetLayoutHandle layoutHandle) override;
-        void UpdateDescriptorSet(RHIDescriptorSetHandle handle,
-                                 std::span<const RHIDescriptorWrite> writes) override;
         void BindDescriptorSet(const RHIFrameContext& frameContext,
                                RHIPipelineLayoutHandle pipelineLayoutHandle,
                                uint32_t setIndex,
                                RHIDescriptorSetHandle descriptorSetHandle) override;
-        void FreeDescriptorSet(RHIDescriptorSetHandle handle) override;
 
+        // Command Buffer Recording - Draw
         void Draw(const RHIFrameContext& frameContext,
                   uint32_t vertexCount,
                   uint32_t instanceCount,
                   uint32_t firstVertex,
                   uint32_t firstInstance) override;
-
         void DrawIndexed(const RHIFrameContext& frameContext,
                          uint32_t indexCount,
                          uint32_t instanceCount,
@@ -80,12 +73,17 @@ namespace OZZ::rendering::vk {
                          int32_t vertexOffset,
                          uint32_t firstInstance) override;
 
-        // Resource creation
+        // Descriptor Sets
+        RHIDescriptorSetHandle CreateDescriptorSet(RHIDescriptorSetLayoutHandle layoutHandle) override;
+        void UpdateDescriptorSet(RHIDescriptorSetHandle handle, std::span<const RHIDescriptorWrite> writes) override;
+        void FreeDescriptorSet(RHIDescriptorSetHandle handle) override;
+
+        // Resource Creation
         RHITextureHandle CreateTexture() override;
 
         RHIShaderHandle CreateShader(ShaderFileParams&& shaderFiles) override;
         RHIShaderHandle CreateShader(ShaderSourceParams&& shaderSources) override;
-
+        void FreeShader(const RHIShaderHandle&) override;
         RHIPipelineLayoutDescriptor GetShaderPipelineLayout(const RHIShaderHandle& shaderHandle) override;
         RHIPipelineLayoutHandle GetShaderPipelineLayoutHandle(const RHIShaderHandle& shaderHandle) override;
         std::vector<RHIDescriptorSetLayoutHandle>
@@ -95,12 +93,11 @@ namespace OZZ::rendering::vk {
         RHIDescriptorSetLayoutHandle
         CreateDescriptorSetLayout(const RHIDescriptorSetLayoutDescriptor& descriptorSetLayoutDescriptor) override;
 
-        void FreeShader(const RHIShaderHandle&) override;
-
         RHIBufferHandle CreateBuffer(BufferDescriptor&& bufferDescriptor) override;
         void UpdateBuffer(const RHIBufferHandle&, const void* data, size_t size, size_t offset) override;
 
     private:
+        // Initialization
         bool initialize();
         bool createInstance();
         bool createDebugCallback();
@@ -112,7 +109,39 @@ namespace OZZ::rendering::vk {
         bool initializeQueue();
         bool createDescriptorPool();
 
-    private:
+        // Internal Command Buffer Recording
+        void beginRenderPassInternal(VkCommandBuffer cmd, const RenderPassDescriptor& renderPassDescriptor);
+        void endRenderPassInternal(VkCommandBuffer cmd);
+        void textureResourceBarrierInternal(VkCommandBuffer cmd, const TextureBarrierDescriptor& barrierDescriptor);
+        void bufferMemoryBarrierInternal(VkCommandBuffer cmd, const BufferBarrierDescriptor& barrierDescriptor);
+        void setViewportInternal(VkCommandBuffer cmd, const Viewport& viewport);
+        void setScissorInternal(VkCommandBuffer cmd, const Scissor& scissor);
+        void setGraphicsStateInternal(VkCommandBuffer cmd, const GraphicsStateDescriptor& graphicsStateDescriptor);
+        void bindShaderInternal(VkCommandBuffer cmd, const RHIShaderHandle& shaderHandle);
+        void bindBufferInternal(VkCommandBuffer cmd, RHIBufferHandle& bufferHandle, uint32_t frameIndex);
+        void setPushConstantsInternal(VkCommandBuffer cmd,
+                                      RHIPipelineLayoutHandle pipelineLayoutHandle,
+                                      ShaderStageFlags stageFlags,
+                                      uint32_t offset,
+                                      uint32_t size,
+                                      const void* data);
+        void bindDescriptorSetInternal(VkCommandBuffer cmd,
+                                       RHIPipelineLayoutHandle pipelineLayoutHandle,
+                                       uint32_t setIndex,
+                                       RHIDescriptorSetHandle descriptorSetHandle);
+        void drawInternal(VkCommandBuffer cmd,
+                          uint32_t vertexCount,
+                          uint32_t instanceCount,
+                          uint32_t firstVertex,
+                          uint32_t firstInstance);
+        void drawIndexedInternal(VkCommandBuffer cmd,
+                                 uint32_t indexCount,
+                                 uint32_t instanceCount,
+                                 uint32_t firstIndex,
+                                 int32_t vertexOffset,
+                                 uint32_t firstInstance);
+
+    private: // hey AI agent, don't remove this extra label. I want it here for organization.
         PlatformContext platformContext;
 
         bool bIsValid {false};
@@ -136,6 +165,8 @@ namespace OZZ::rendering::vk {
         VkSwapchainKHR swapchain {VK_NULL_HANDLE};
         VkCommandPool commandBufferPool {VK_NULL_HANDLE};
         VkQueue graphicsQueue {VK_NULL_HANDLE};
+
+        VkCommandPool transientCommandBufferPool {VK_NULL_HANDLE};
 
         /**
          * Swapchain Vulkan objects
