@@ -79,8 +79,10 @@ namespace OZZ::rendering {
         ColorAttachmentRead,
         ColorAttachmentWrite,
         ShaderRead,
+        ShaderWrite,
         TransferRead,
         TransferWrite,
+        DepthStencilAttachmentRead,
         DepthStencilAttachmentWrite,
     };
 
@@ -109,6 +111,31 @@ namespace OZZ::rendering {
     };
 
     using ColorComponentFlags = uint8_t;
+
+    enum class BlendFactor {
+        Zero,
+        One,
+        SrcColor,
+        OneMinusSrcColor,
+        DstColor,
+        OneMinusDstColor,
+        SrcAlpha,
+        OneMinusSrcAlpha,
+        DstAlpha,
+        OneMinusDstAlpha,
+        ConstantColor,
+        OneMinusConstantColor,
+        ConstantAlpha,
+        OneMinusConstantAlpha,
+    };
+
+    enum class BlendOp {
+        Add,
+        Subtract,
+        ReverseSubtract,
+        Min,
+        Max,
+    };
 
     enum class VertexInputRate {
         Vertex,

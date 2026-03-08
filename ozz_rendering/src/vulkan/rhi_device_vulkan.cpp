@@ -1156,6 +1156,7 @@ namespace OZZ::rendering::vk {
         vkCmdSetPolygonModeEXT(cmd, ConvertPolygonModeToVulkan(graphicsStateDescriptor.Rasterization.Polygon));
         vkCmdSetDepthBiasEnable(cmd, graphicsStateDescriptor.Rasterization.DepthBiasEnable);
         vkCmdSetRasterizerDiscardEnable(cmd, graphicsStateDescriptor.Rasterization.RasterizerDiscard);
+        vkCmdSetLineWidth(cmd, graphicsStateDescriptor.Rasterization.LineWidth);
 
         // Depth / Stencil
         vkCmdSetDepthTestEnable(cmd, graphicsStateDescriptor.DepthStencil.DepthTestEnable);
@@ -1174,13 +1175,23 @@ namespace OZZ::rendering::vk {
         if (graphicsStateDescriptor.ColorBlendAttachmentCount > 0) {
             VkBool32 blendEnables[MaxBlendAttachments];
             VkColorComponentFlags colorWriteMasks[MaxBlendAttachments];
+            VkColorBlendEquationEXT blendEquations[MaxBlendAttachments];
             for (uint32_t i = 0; i < graphicsStateDescriptor.ColorBlendAttachmentCount; ++i) {
-                blendEnables[i] = graphicsStateDescriptor.ColorBlend[i].BlendEnable;
-                colorWriteMasks[i] =
-                    ConvertColorComponentFlagsToVulkan(graphicsStateDescriptor.ColorBlend[i].ColorWriteMask);
+                const auto& src = graphicsStateDescriptor.ColorBlend[i];
+                blendEnables[i] = src.BlendEnable;
+                colorWriteMasks[i] = ConvertColorComponentFlagsToVulkan(src.ColorWriteMask);
+                blendEquations[i] = {
+                    .srcColorBlendFactor = ConvertBlendFactorToVulkan(src.SrcColorFactor),
+                    .dstColorBlendFactor = ConvertBlendFactorToVulkan(src.DstColorFactor),
+                    .colorBlendOp        = ConvertBlendOpToVulkan(src.ColorBlendOp),
+                    .srcAlphaBlendFactor = ConvertBlendFactorToVulkan(src.SrcAlphaFactor),
+                    .dstAlphaBlendFactor = ConvertBlendFactorToVulkan(src.DstAlphaFactor),
+                    .alphaBlendOp        = ConvertBlendOpToVulkan(src.AlphaBlendOp),
+                };
             }
             vkCmdSetColorBlendEnableEXT(cmd, 0, graphicsStateDescriptor.ColorBlendAttachmentCount, blendEnables);
             vkCmdSetColorWriteMaskEXT(cmd, 0, graphicsStateDescriptor.ColorBlendAttachmentCount, colorWriteMasks);
+            vkCmdSetColorBlendEquationEXT(cmd, 0, graphicsStateDescriptor.ColorBlendAttachmentCount, blendEquations);
         }
 
         // Vertex Input

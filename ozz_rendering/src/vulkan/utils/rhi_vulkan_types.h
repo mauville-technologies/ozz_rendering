@@ -54,10 +54,14 @@ namespace OZZ::rendering::vk {
                 return VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
             case Access::ShaderRead:
                 return VK_ACCESS_2_SHADER_READ_BIT;
+            case Access::ShaderWrite:
+                return VK_ACCESS_2_SHADER_WRITE_BIT;
             case Access::TransferRead:
                 return VK_ACCESS_2_TRANSFER_READ_BIT;
             case Access::TransferWrite:
                 return VK_ACCESS_2_TRANSFER_WRITE_BIT;
+            case Access::DepthStencilAttachmentRead:
+                return VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
             case Access::DepthStencilAttachmentWrite:
                 return VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
         }
@@ -215,6 +219,37 @@ namespace OZZ::rendering::vk {
         if (flags & static_cast<ColorComponentFlags>(ColorComponent::A))
             result |= VK_COLOR_COMPONENT_A_BIT;
         return result;
+    }
+
+    inline VkBlendFactor ConvertBlendFactorToVulkan(const BlendFactor factor) {
+        switch (factor) {
+            case BlendFactor::Zero:                  return VK_BLEND_FACTOR_ZERO;
+            case BlendFactor::One:                   return VK_BLEND_FACTOR_ONE;
+            case BlendFactor::SrcColor:              return VK_BLEND_FACTOR_SRC_COLOR;
+            case BlendFactor::OneMinusSrcColor:      return VK_BLEND_FACTOR_ONE_MINUS_SRC_COLOR;
+            case BlendFactor::DstColor:              return VK_BLEND_FACTOR_DST_COLOR;
+            case BlendFactor::OneMinusDstColor:      return VK_BLEND_FACTOR_ONE_MINUS_DST_COLOR;
+            case BlendFactor::SrcAlpha:              return VK_BLEND_FACTOR_SRC_ALPHA;
+            case BlendFactor::OneMinusSrcAlpha:      return VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+            case BlendFactor::DstAlpha:              return VK_BLEND_FACTOR_DST_ALPHA;
+            case BlendFactor::OneMinusDstAlpha:      return VK_BLEND_FACTOR_ONE_MINUS_DST_ALPHA;
+            case BlendFactor::ConstantColor:         return VK_BLEND_FACTOR_CONSTANT_COLOR;
+            case BlendFactor::OneMinusConstantColor: return VK_BLEND_FACTOR_ONE_MINUS_CONSTANT_COLOR;
+            case BlendFactor::ConstantAlpha:         return VK_BLEND_FACTOR_CONSTANT_ALPHA;
+            case BlendFactor::OneMinusConstantAlpha: return VK_BLEND_FACTOR_ONE_MINUS_CONSTANT_ALPHA;
+        }
+        return VK_BLEND_FACTOR_ONE;
+    }
+
+    inline VkBlendOp ConvertBlendOpToVulkan(const BlendOp op) {
+        switch (op) {
+            case BlendOp::Add:             return VK_BLEND_OP_ADD;
+            case BlendOp::Subtract:        return VK_BLEND_OP_SUBTRACT;
+            case BlendOp::ReverseSubtract: return VK_BLEND_OP_REVERSE_SUBTRACT;
+            case BlendOp::Min:             return VK_BLEND_OP_MIN;
+            case BlendOp::Max:             return VK_BLEND_OP_MAX;
+        }
+        return VK_BLEND_OP_ADD;
     }
 
     inline VkVertexInputRate ConvertVertexInputRateToVulkan(const VertexInputRate inputRate) {

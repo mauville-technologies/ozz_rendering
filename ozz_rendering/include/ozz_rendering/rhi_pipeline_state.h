@@ -24,6 +24,8 @@ namespace OZZ::rendering {
         PolygonMode Polygon {PolygonMode::Fill};
         bool DepthBiasEnable {false};
         bool RasterizerDiscard {false};
+        float LineWidth {1.0f};
+        float PointSize {1.0f}; // Note: in Vulkan, point size is controlled via gl_PointSize in the vertex shader
     };
 
     struct DepthStencilState {
@@ -40,6 +42,12 @@ namespace OZZ::rendering {
 
     struct ColorBlendAttachmentState {
         bool BlendEnable {false};
+        BlendFactor SrcColorFactor {BlendFactor::SrcAlpha};
+        BlendFactor DstColorFactor {BlendFactor::OneMinusSrcAlpha};
+        BlendOp ColorBlendOp {BlendOp::Add};
+        BlendFactor SrcAlphaFactor {BlendFactor::One};
+        BlendFactor DstAlphaFactor {BlendFactor::Zero};
+        BlendOp AlphaBlendOp {BlendOp::Add};
         ColorComponentFlags ColorWriteMask {
             static_cast<ColorComponentFlags>(ColorComponent::All),
         };
