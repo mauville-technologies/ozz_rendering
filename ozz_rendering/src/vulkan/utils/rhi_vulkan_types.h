@@ -34,6 +34,8 @@ namespace OZZ::rendering::vk {
                 return VK_PIPELINE_STAGE_VERTEX_SHADER_BIT;
             case PipelineStage::FragmentShader:
                 return VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+            case PipelineStage::EarlyFragmentTests:
+                return VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT;
             case PipelineStage::AllGraphics:
                 return VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT;
             case PipelineStage::AllCommands:
@@ -56,6 +58,8 @@ namespace OZZ::rendering::vk {
                 return VK_ACCESS_2_TRANSFER_READ_BIT;
             case Access::TransferWrite:
                 return VK_ACCESS_2_TRANSFER_WRITE_BIT;
+            case Access::DepthStencilAttachmentWrite:
+                return VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
         }
 
         return VK_ACCESS_2_NONE;
@@ -83,16 +87,31 @@ namespace OZZ::rendering::vk {
     }
 
     inline VkImageAspectFlags ConvertTextureAspectToVulkan(const TextureAspect aspect) {
-        switch (aspect) {
-            case TextureAspect::Color:
-                return VK_IMAGE_ASPECT_COLOR_BIT;
-            case TextureAspect::Depth:
-                return VK_IMAGE_ASPECT_DEPTH_BIT;
-            case TextureAspect::Stencil:
-                return VK_IMAGE_ASPECT_STENCIL_BIT;
-        }
+        VkImageAspectFlags flags = 0;
 
-        return VK_IMAGE_ASPECT_FLAG_BITS_MAX_ENUM;
+        if (has(aspect, TextureAspect::Color))
+            flags |= VK_IMAGE_ASPECT_COLOR_BIT;
+        if (has(aspect, TextureAspect::Depth))
+            flags |= VK_IMAGE_ASPECT_DEPTH_BIT;
+        if (has(aspect, TextureAspect::Stencil))
+            flags |= VK_IMAGE_ASPECT_STENCIL_BIT;
+
+        return flags;
+    }
+
+    inline VkImageAspectFlags GetAspectMask(const TextureFormat format) {
+        switch (format) {
+            case TextureFormat::D32Float:
+                return VK_IMAGE_ASPECT_DEPTH_BIT;
+            case TextureFormat::D24S8:
+                return VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
+            default:
+                return VK_IMAGE_ASPECT_COLOR_BIT;
+        }
+    }
+
+    inline bool IsDepthFormat(const TextureFormat format) {
+        return format == TextureFormat::D32Float || format == TextureFormat::D24S8;
     }
 
     inline VkAttachmentLoadOp ConvertLoadOpToVulkan(const LoadOp loadOp) {

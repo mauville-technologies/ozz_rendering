@@ -179,6 +179,7 @@ namespace OZZ::rendering::vk {
         std::vector<VkImage> swapchainImages;
         std::vector<VkImageView> swapchainImageViews;
         std::vector<RHITextureHandle> swapchainTextureHandles;
+        std::vector<RHITextureHandle> swapchainDepthTextureHandles;
         std::vector<VkSemaphore> presentCompleteSemaphores;
 
         /**

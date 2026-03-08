@@ -69,6 +69,7 @@ namespace OZZ::rendering {
         Transfer,
         VertexShader,
         FragmentShader,
+        EarlyFragmentTests,
         AllGraphics,
         AllCommands,
     };
@@ -80,12 +81,13 @@ namespace OZZ::rendering {
         ShaderRead,
         TransferRead,
         TransferWrite,
+        DepthStencilAttachmentWrite,
     };
 
     enum class TextureAspect {
-        Color,
-        Depth,
-        Stencil,
+        Color = 1 << 0,
+        Depth = 1 << 1,
+        Stencil = 1 << 2,
     };
 
     struct TextureSubresourceRange {
@@ -154,3 +156,9 @@ namespace OZZ::rendering {
     };
 
 } // namespace OZZ::rendering
+
+template <>
+struct enable_bitmask_operators<OZZ::rendering::TextureAspect> : std::true_type {};
+
+template <>
+struct enable_bitmask_operators<OZZ::rendering::ColorComponent> : std::true_type {};

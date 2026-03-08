@@ -292,22 +292,22 @@ namespace OZZ::rendering::vk {
             return false;
         }
 
-        if (!createSwapchain()) {
-            failureMessage();
-            return false;
-        }
-
         if (!createCommandBufferPool()) {
             failureMessage();
             return false;
         }
 
-        if (!createSubmissionContexts()) {
+        if (!initializeQueue()) {
             failureMessage();
             return false;
         }
 
-        if (!initializeQueue()) {
+        if (!createSwapchain()) {
+            failureMessage();
+            return false;
+        }
+
+        if (!createSubmissionContexts()) {
             failureMessage();
             return false;
         }
@@ -585,6 +585,14 @@ namespace OZZ::rendering::vk {
                               static_cast<int>(result));
                 return false;
             }
+
+            // Create the depth images
+            swapchainDepthTextureHandles.emplace_back(CreateTexture({
+                .Width = surfaceCapabilities.currentExtent.width,
+                .Height = surfaceCapabilities.currentExtent.height,
+                .Format = TextureFormat::D24S8,
+                .Usage = TextureUsage::DepthAttachment,
+            }));
         }
 
         return true;
@@ -832,6 +840,7 @@ namespace OZZ::rendering::vk {
 
         auto frameContext = BuildFrameContext(submissionContext.CommandBuffer,
                                               swapchainTextureHandles[imageIndex],
+                                              swapchainDepthTextureHandles[imageIndex],
                                               imageIndex,
                                               currentFrame);
         TextureResourceBarrier(frameContext,
@@ -923,8 +932,10 @@ namespace OZZ::rendering::vk {
     void RHIDeviceVulkan::beginRenderPassInternal(VkCommandBuffer cmd,
                                                   const RenderPassDescriptor& renderPassDescriptor) {
         std::vector<VkRenderingAttachmentInfo> colorAttachments;
-        bool bHasDepthStencilAttachment = false;
-        VkRenderingAttachmentInfo depthStencilAttachment;
+        bool bHasDepthAttachment = false;
+        bool bHasStencilAttachment = false;
+        VkRenderingAttachmentInfo depthAttachment;
+        VkRenderingAttachmentInfo stencilAttachment;
 
         for (auto i = 0u; i < renderPassDescriptor.ColorAttachmentCount; i++) {
             const auto& attachment = renderPassDescriptor.ColorAttachments[i];
@@ -942,15 +953,6 @@ namespace OZZ::rendering::vk {
                     attachment.Clear.A,
                 };
             }
-            if (attachment.Layout == TextureLayout::DepthStencilAttachment) {
-                clearValue = VkClearValue {
-                    .depthStencil =
-                        {
-                            .depth = attachment.Clear.Depth,
-                            .stencil = attachment.Clear.Stencil,
-                        },
-                };
-            }
 
             VkRenderingAttachmentInfo attachmentInfo {
                 .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
@@ -961,19 +963,39 @@ namespace OZZ::rendering::vk {
                 .storeOp = ConvertStoreOpToVulkan(attachment.Store),
                 .clearValue = clearValue,
             };
+            colorAttachments.emplace_back(attachmentInfo);
+        }
 
-            if (attachment.Layout == TextureLayout::DepthStencilAttachment) {
-                // TODO: implement this when needed
-                // bHasDepthStencilAttachment = true;
-                // depthStencilAttachment = attachmentInfo;
-                // depthStencilAttachment.imageLayout =
-                //     ConvertTextureLayoutToVulkan(TextureLayout::DepthStencilAttachment);
-                // depthStencilAttachment.loadOp = ConvertLoadOpToVulkan(attachment.Load);
-                // depthStencilAttachment.storeOp = ConvertStoreOpToVulkan(attachment.Store);
-                assert(false && "Depth stencil attachments not implemented!!");
-            } else {
-                colorAttachments.emplace_back(attachmentInfo);
-            }
+        if (renderPassDescriptor.DepthAttachment.Texture != RHITextureHandle::Null()) {
+            bHasDepthAttachment = true;
+            const auto* texture = texturePool.Get(renderPassDescriptor.DepthAttachment.Texture);
+            VkClearValue clearValue;
+            clearValue.depthStencil.depth = renderPassDescriptor.DepthAttachment.Clear.Depth;
+            depthAttachment = VkRenderingAttachmentInfo {
+                .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+                .pNext = nullptr,
+                .imageView = texture->ImageView,
+                .imageLayout = ConvertTextureLayoutToVulkan(renderPassDescriptor.DepthAttachment.Layout),
+                .loadOp = ConvertLoadOpToVulkan(renderPassDescriptor.DepthAttachment.Load),
+                .storeOp = ConvertStoreOpToVulkan(renderPassDescriptor.DepthAttachment.Store),
+                .clearValue = clearValue,
+            };
+        }
+
+        if (renderPassDescriptor.StencilAttachment.Texture != RHITextureHandle::Null()) {
+            bHasStencilAttachment = true;
+            const auto* texture = texturePool.Get(renderPassDescriptor.StencilAttachment.Texture);
+            VkClearValue clearValue;
+            clearValue.depthStencil.stencil = renderPassDescriptor.StencilAttachment.Clear.Stencil;
+            stencilAttachment = VkRenderingAttachmentInfo {
+                .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+                .pNext = nullptr,
+                .imageView = texture->ImageView,
+                .imageLayout = ConvertTextureLayoutToVulkan(renderPassDescriptor.StencilAttachment.Layout),
+                .loadOp = ConvertLoadOpToVulkan(renderPassDescriptor.StencilAttachment.Load),
+                .storeOp = ConvertStoreOpToVulkan(renderPassDescriptor.StencilAttachment.Store),
+                .clearValue = clearValue,
+            };
         }
 
         VkRenderingInfo renderingInfo {
@@ -996,8 +1018,10 @@ namespace OZZ::rendering::vk {
             .layerCount = 1,
             .colorAttachmentCount = static_cast<uint32_t>(colorAttachments.size()),
             .pColorAttachments = colorAttachments.data(),
-            .pDepthAttachment = bHasDepthStencilAttachment ? &depthStencilAttachment : nullptr,
-            .pStencilAttachment = bHasDepthStencilAttachment ? &depthStencilAttachment : nullptr,
+            .pDepthAttachment = bHasDepthAttachment ? &depthAttachment : nullptr,
+            .pStencilAttachment = bHasStencilAttachment ? &stencilAttachment
+                                  : bHasDepthAttachment ? &depthAttachment
+                                                        : nullptr,
         };
 
         vkCmdBeginRendering(cmd, &renderingInfo);
@@ -1449,7 +1473,6 @@ namespace OZZ::rendering::vk {
         };
 
         RHITextureVulkan texture {
-            .Format = ConvertTextureFormatToVulkan(descriptor.Format),
             .Width = descriptor.Width,
             .Height = descriptor.Height,
         };
@@ -1481,7 +1504,7 @@ namespace OZZ::rendering::vk {
                 },
             .subresourceRange =
                 {
-                    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                    .aspectMask = GetAspectMask(descriptor.Format),
                     .baseMipLevel = 0,
                     .levelCount = 1,
                     .baseArrayLayer = 0,
@@ -1496,35 +1519,61 @@ namespace OZZ::rendering::vk {
             return RHITextureHandle::Null();
         }
 
-        VkSamplerCreateInfo samplerCreateInfo {
-            .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
-            .pNext = nullptr,
-            .flags = 0,
-            .magFilter = ConvertSamplerFilterToVulkan(descriptor.Sampler.MagFilter),
-            .minFilter = ConvertSamplerFilterToVulkan(descriptor.Sampler.MinFilter),
-            .mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR,
-            .addressModeU = ConvertSamplerAddressModeToVulkan(descriptor.Sampler.WrapU),
-            .addressModeV = ConvertSamplerAddressModeToVulkan(descriptor.Sampler.WrapV),
-            .addressModeW = ConvertSamplerAddressModeToVulkan(descriptor.Sampler.WrapW),
-            .mipLodBias = 0.f,
-            .anisotropyEnable = VK_TRUE,
-            .maxAnisotropy = physicalDevices.SelectedDevice().Properties.properties.limits.maxSamplerAnisotropy,
-            .compareEnable = VK_FALSE,
-            .compareOp = VK_COMPARE_OP_ALWAYS,
-            .minLod = 0.f,
-            .maxLod = 0.f,
-            .borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK,
-            .unnormalizedCoordinates = VK_FALSE,
-        };
+        if (has(descriptor.Usage, TextureUsage::Sampled)) {
+            VkSamplerCreateInfo samplerCreateInfo {
+                .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+                .pNext = nullptr,
+                .flags = 0,
+                .magFilter = ConvertSamplerFilterToVulkan(descriptor.Sampler.MagFilter),
+                .minFilter = ConvertSamplerFilterToVulkan(descriptor.Sampler.MinFilter),
+                .mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR,
+                .addressModeU = ConvertSamplerAddressModeToVulkan(descriptor.Sampler.WrapU),
+                .addressModeV = ConvertSamplerAddressModeToVulkan(descriptor.Sampler.WrapV),
+                .addressModeW = ConvertSamplerAddressModeToVulkan(descriptor.Sampler.WrapW),
+                .mipLodBias = 0.f,
+                .anisotropyEnable = VK_TRUE,
+                .maxAnisotropy = physicalDevices.SelectedDevice().Properties.properties.limits.maxSamplerAnisotropy,
+                .compareEnable = VK_FALSE,
+                .compareOp = VK_COMPARE_OP_ALWAYS,
+                .minLod = 0.f,
+                .maxLod = 0.f,
+                .borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK,
+                .unnormalizedCoordinates = VK_FALSE,
+            };
 
-        if (const auto result = vkCreateSampler(device, &samplerCreateInfo, nullptr, &texture.Sampler);
-            result != VK_SUCCESS) {
-            spdlog::error("Failed to create sampler for texture. Error: {}", static_cast<int>(result));
-            vkDestroyImageView(device, texture.ImageView, nullptr);
-            vmaDestroyImage(vmaAllocator, texture.Image, texture.Allocation);
-            return RHITextureHandle::Null();
+            if (const auto result = vkCreateSampler(device, &samplerCreateInfo, nullptr, &texture.Sampler);
+                result != VK_SUCCESS) {
+                spdlog::error("Failed to create sampler for texture. Error: {}", static_cast<int>(result));
+                vkDestroyImageView(device, texture.ImageView, nullptr);
+                vmaDestroyImage(vmaAllocator, texture.Image, texture.Allocation);
+                return RHITextureHandle::Null();
+            }
         }
-        return texturePool.Allocate(std::move(texture));
+
+        const auto handle = texturePool.Allocate(std::move(texture));
+        if (has(descriptor.Usage, TextureUsage::DepthAttachment)) {
+            const auto immediateCmd = beginSingleTimeCommands();
+            textureResourceBarrierInternal(immediateCmd,
+                                           TextureBarrierDescriptor {
+                                               .Texture = handle,
+                                               .OldLayout = TextureLayout::Undefined,
+                                               .NewLayout = TextureLayout::DepthStencilAttachment,
+                                               .SrcStage = PipelineStage::None,
+                                               .DstStage = PipelineStage::EarlyFragmentTests,
+                                               .SrcAccess = Access::None,
+                                               .DstAccess = Access::DepthStencilAttachmentWrite,
+                                               .SubresourceRange =
+                                                   {
+                                                       .Aspect = TextureAspect::Stencil | TextureAspect::Depth,
+                                                       .BaseMipLevel = 0,
+                                                       .LevelCount = 1,
+                                                       .BaseArrayLayer = 0,
+                                                       .LayerCount = 1,
+                                                   },
+                                           });
+            endSingleTimeCommands(immediateCmd);
+        }
+        return handle;
     }
 
     void RHIDeviceVulkan::UpdateTexture(const RHITextureHandle& handle, const void* data, size_t size) {

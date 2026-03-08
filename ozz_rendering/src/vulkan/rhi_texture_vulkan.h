@@ -13,7 +13,6 @@ namespace OZZ::rendering::vk {
         VkSampler Sampler {VK_NULL_HANDLE};
         VmaAllocation Allocation {VK_NULL_HANDLE};
         VmaAllocationInfo AllocationInfo {};
-        VkFormat Format {VK_FORMAT_UNDEFINED};
 
         uint32_t Width {0};
         uint32_t Height {0};

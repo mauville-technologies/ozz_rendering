@@ -81,8 +81,28 @@ OZZ::rendering::RenderPassDescriptor renderPassDescriptor {
             },
         },
     .ColorAttachmentCount = 1,
-    .DepthAttachment = {},
-    .StencilAttachment = {},
+    .DepthAttachment =
+        {
+            .Load = OZZ::rendering::LoadOp::Clear,
+            .Store = OZZ::rendering::StoreOp::DontCare,
+            .Clear =
+                {
+                    .Depth = 1.f,
+                    .Stencil = 0,
+                },
+            .Layout = OZZ::rendering::TextureLayout::DepthStencilAttachment,
+        },
+    .StencilAttachment =
+        {
+            .Load = OZZ::rendering::LoadOp::Clear,
+            .Store = OZZ::rendering::StoreOp::DontCare,
+            .Clear =
+                {
+                    .Depth = 1.f,
+                    .Stencil = 0,
+                },
+            .Layout = OZZ::rendering::TextureLayout::DepthStencilAttachment,
+        },
     .RenderArea =
         {
             .X = 0,
@@ -300,7 +320,9 @@ int main() {
         count++;
         glfwPollEvents();
         auto context = rhiDevice->BeginFrame();
-        renderPassDescriptor.ColorAttachments[0].Texture = context.GetBackbuffer();
+        renderPassDescriptor.ColorAttachments[0].Texture = context.GetBackbufferImage();
+        renderPassDescriptor.DepthAttachment.Texture = context.GetBackbufferDepthImage();
+        // renderPassDescriptor.StencilAttachment.Texture = context.GetBackbufferDepthImage();
         rhiDevice->BeginRenderPass(context, renderPassDescriptor);
         rhiDevice->SetGraphicsState(
             context,

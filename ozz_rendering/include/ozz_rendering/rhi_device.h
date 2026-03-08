@@ -55,32 +55,41 @@ namespace OZZ::rendering {
         // Only thing app-level renderables can do:
         [[nodiscard]] RHICommandBufferHandle GetCommandBuffer() const { return commandBuffer; }
 
-        [[nodiscard]] RHITextureHandle GetBackbuffer() const { return backbuffer; }
+        [[nodiscard]] RHITextureHandle GetBackbufferImage() const { return colorAttachment; }
+
+        [[nodiscard]] RHITextureHandle GetBackbufferDepthImage() const {
+            return depthAttachment;
+        } // for now, assume combined depth+color
 
         // Non-copyable - one frame in flight at a time
         RHIFrameContext(const RHIFrameContext&) = delete;
         RHIFrameContext& operator=(const RHIFrameContext&) = delete;
         RHIFrameContext(RHIFrameContext&&) = default;
 
-        [[nodiscard]] bool IsValid() const { return commandBuffer.IsValid() && backbuffer.IsValid(); }
+        [[nodiscard]] bool IsValid() const { return commandBuffer.IsValid() && colorAttachment.IsValid(); }
 
-        static RHIFrameContext Null() { return {RHICommandBufferHandle::Null(), RHITextureHandle::Null(), 0, 0}; }
+        static RHIFrameContext Null() {
+            return {RHICommandBufferHandle::Null(), RHITextureHandle::Null(), RHITextureHandle::Null(), 0, 0};
+        }
 
     private:
         // Only RHIDevice can construct this
         friend class RHIDevice;
 
         RHIFrameContext(RHICommandBufferHandle cmd,
-                        RHITextureHandle backbuffer,
+                        RHITextureHandle colorImage,
+                        RHITextureHandle depthImage,
                         uint32_t imageIndex,
                         uint32_t frameIndex)
             : commandBuffer(cmd)
-            , backbuffer(backbuffer)
+            , colorAttachment(colorImage)
+            , depthAttachment(depthImage)
             , imageIndex(imageIndex)    // hidden from app
             , frameIndex(frameIndex) {} // hidden from app
 
         RHICommandBufferHandle commandBuffer;
-        RHITextureHandle backbuffer;
+        RHITextureHandle colorAttachment;
+        RHITextureHandle depthAttachment;
 
         uint32_t imageIndex; // raw swapchain index - internal only
         uint32_t frameIndex; // frame-in-flight index - internal only
@@ -170,10 +179,11 @@ namespace OZZ::rendering {
         explicit RHIDevice(const PlatformContext&) {};
 
         static RHIFrameContext BuildFrameContext(RHICommandBufferHandle cmd,
-                                                 RHITextureHandle backbuffer,
+                                                 RHITextureHandle colorImage,
+                                                 RHITextureHandle depthImage,
                                                  uint32_t imageIndex,
                                                  uint32_t frameIndex) {
-            return {cmd, backbuffer, imageIndex, frameIndex};
+            return {cmd, colorImage, depthImage, imageIndex, frameIndex};
         }
 
         static uint32_t GetFrameNumberFromFrameContext(const RHIFrameContext& context) { return context.frameIndex; }
