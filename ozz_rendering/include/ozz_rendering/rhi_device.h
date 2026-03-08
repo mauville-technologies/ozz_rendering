@@ -20,6 +20,7 @@
 #include <ozz_rendering/rhi_handle.h>
 #include <ozz_rendering/rhi_pipeline_state.h>
 #include <ozz_rendering/rhi_renderpass.h>
+#include <ozz_rendering/rhi_texture.h>
 #include <ozz_rendering/rhi_types.h>
 
 namespace OZZ::rendering {
@@ -140,12 +141,13 @@ namespace OZZ::rendering {
 
         // Descriptor Sets
         virtual RHIDescriptorSetHandle CreateDescriptorSet(RHIDescriptorSetLayoutHandle layoutHandle) = 0;
-        virtual void UpdateDescriptorSet(RHIDescriptorSetHandle handle,
-                                         std::span<const RHIDescriptorWrite> writes) = 0;
+        virtual void UpdateDescriptorSet(RHIDescriptorSetHandle handle, std::span<const RHIDescriptorWrite> writes) = 0;
         virtual void FreeDescriptorSet(RHIDescriptorSetHandle handle) = 0;
 
         // Resource Creation
-        virtual RHITextureHandle CreateTexture() = 0;
+        virtual RHITextureHandle CreateTexture(TextureDescriptor&& descriptor) = 0;
+        virtual void UpdateTexture(const RHITextureHandle& handle, const void* data, size_t size) = 0;
+        virtual void FreeTexture(RHITextureHandle handle) = 0;
 
         virtual RHIShaderHandle CreateShader(ShaderFileParams&& fileParams) = 0;
         virtual RHIShaderHandle CreateShader(ShaderSourceParams&& sourceParams) = 0;

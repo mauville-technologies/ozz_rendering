@@ -40,6 +40,7 @@ namespace OZZ::rendering::vk {
         void Destroy(VkDevice vk_device);
 
         [[nodiscard]] bool IsValid() const { return bIsValid; }
+
         [[nodiscard]] bool IsCompiled() const { return bIsCompiled; }
 
         RHIPipelineLayoutDescriptor GetPipelineLayoutDescriptor() const;

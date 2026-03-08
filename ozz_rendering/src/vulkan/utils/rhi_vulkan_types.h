@@ -12,6 +12,7 @@
 
 #include "ozz_rendering/rhi_barrier.h"
 #include "ozz_rendering/rhi_buffer.h"
+#include "ozz_rendering/rhi_texture.h"
 #include "spdlog/spdlog.h"
 
 namespace OZZ::rendering::vk {
@@ -29,6 +30,10 @@ namespace OZZ::rendering::vk {
                 return VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
             case PipelineStage::Transfer:
                 return VK_PIPELINE_STAGE_TRANSFER_BIT;
+            case PipelineStage::VertexShader:
+                return VK_PIPELINE_STAGE_VERTEX_SHADER_BIT;
+            case PipelineStage::FragmentShader:
+                return VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
             case PipelineStage::AllGraphics:
                 return VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT;
             case PipelineStage::AllCommands:
@@ -292,6 +297,61 @@ namespace OZZ::rendering::vk {
         if (has(flags, ShaderStageFlags::Fragment))
             result |= VK_SHADER_STAGE_FRAGMENT_BIT;
         return result;
+    }
+
+    inline VkImageUsageFlags ConvertTextureUsageToVulkan(const TextureUsage usage) {
+        VkImageUsageFlags flags = 0;
+        if (has(usage, TextureUsage::ColorAttachment))
+            flags |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+        if (has(usage, TextureUsage::DepthAttachment))
+            flags |= VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+        if (has(usage, TextureUsage::Sampled))
+            flags |= VK_IMAGE_USAGE_SAMPLED_BIT;
+        if (has(usage, TextureUsage::TransferSrc))
+            flags |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+        if (has(usage, TextureUsage::TransferDst))
+            flags |= VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+        return flags;
+    }
+
+    inline VkFormat ConvertTextureFormatToVulkan(const TextureFormat format) {
+        switch (format) {
+            case TextureFormat::RGBA8:
+                return VK_FORMAT_R8G8B8A8_UNORM;
+            case TextureFormat::RGB8:
+                return VK_FORMAT_R8G8B8_UNORM;
+            case TextureFormat::R8:
+                return VK_FORMAT_R8_UNORM;
+            case TextureFormat::BGRA8:
+                return VK_FORMAT_B8G8R8A8_UNORM;
+            case TextureFormat::D32Float:
+                return VK_FORMAT_D32_SFLOAT;
+            case TextureFormat::D24S8:
+                return VK_FORMAT_D24_UNORM_S8_UINT;
+        }
+        return VK_FORMAT_UNDEFINED;
+    }
+
+    inline VkFilter ConvertSamplerFilterToVulkan(const TextureFilter filter) {
+        switch (filter) {
+            case TextureFilter::Linear:
+                return VK_FILTER_LINEAR;
+            case TextureFilter::Nearest:
+                return VK_FILTER_NEAREST;
+        }
+        return VK_FILTER_LINEAR;
+    }
+
+    inline VkSamplerAddressMode ConvertSamplerAddressModeToVulkan(const TextureWrap wrap) {
+        switch (wrap) {
+            case TextureWrap::Repeat:
+                return VK_SAMPLER_ADDRESS_MODE_REPEAT;
+            case TextureWrap::ClampToEdge:
+                return VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+            case TextureWrap::ClampToBorder:
+                return VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
+        }
+        return VK_SAMPLER_ADDRESS_MODE_REPEAT;
     }
 
 } // namespace OZZ::rendering::vk

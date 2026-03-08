@@ -79,7 +79,9 @@ namespace OZZ::rendering::vk {
         void FreeDescriptorSet(RHIDescriptorSetHandle handle) override;
 
         // Resource Creation
-        RHITextureHandle CreateTexture() override;
+        RHITextureHandle CreateTexture(TextureDescriptor&& descriptor) override;
+        void UpdateTexture(const RHITextureHandle& handle, const void* data, size_t size) override;
+        void FreeTexture(RHITextureHandle handle) override;
 
         RHIShaderHandle CreateShader(ShaderFileParams&& shaderFiles) override;
         RHIShaderHandle CreateShader(ShaderSourceParams&& shaderSources) override;
@@ -108,6 +110,10 @@ namespace OZZ::rendering::vk {
         bool createSubmissionContexts();
         bool initializeQueue();
         bool createDescriptorPool();
+
+        // Immediate more command buffers
+        VkCommandBuffer beginSingleTimeCommands();
+        void endSingleTimeCommands(VkCommandBuffer commandBuffer);
 
         // Internal Command Buffer Recording
         void beginRenderPassInternal(VkCommandBuffer cmd, const RenderPassDescriptor& renderPassDescriptor);
@@ -166,8 +172,6 @@ namespace OZZ::rendering::vk {
         VkCommandPool commandBufferPool {VK_NULL_HANDLE};
         VkQueue graphicsQueue {VK_NULL_HANDLE};
 
-        VkCommandPool transientCommandBufferPool {VK_NULL_HANDLE};
-
         /**
          * Swapchain Vulkan objects
          */
@@ -181,6 +185,9 @@ namespace OZZ::rendering::vk {
          * Sync objects
          */
         std::vector<SubmissionContext> submissionContexts;
+
+        std::set<VkCommandBuffer> transientCommandBuffers;
+        VkCommandPool transientCommandBufferPool {VK_NULL_HANDLE};
 
         // resource pools
         ResourcePool<TextureTag, RHITextureVulkan> texturePool;

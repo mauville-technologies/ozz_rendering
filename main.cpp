@@ -1,6 +1,9 @@
 //
 // Created by paulm on 2026-02-21.
 //
+#define STB_IMAGE_IMPLEMENTATION
+#include "stb_image.h"
+
 #define WINDOW_WIDTH 800
 #define WINDOW_HEIGHT 600
 
@@ -25,6 +28,7 @@ struct UBOObject {
 struct Vertex {
     glm::vec3 Position {0.f, 0.f, 1.f};
     glm::vec4 Color {1.f, 0.f, 0.f, 1.f};
+    glm::vec2 TexCoord {0.f, 0.f};
 
     static OZZ::rendering::VertexInputBindingDescriptor GetBindingDescription() {
         return {
@@ -34,7 +38,7 @@ struct Vertex {
         };
     }
 
-    static std::array<OZZ::rendering::VertexInputAttributeDescriptor, 2> GetAttributeDescriptions() {
+    static std::array<OZZ::rendering::VertexInputAttributeDescriptor, 3> GetAttributeDescriptions() {
         return {
             OZZ::rendering::VertexInputAttributeDescriptor {
                 .Location = 0,
@@ -47,6 +51,12 @@ struct Vertex {
                 .Binding = 0,
                 .Format = OZZ::rendering::VertexFormat::Float4,
                 .Offset = offsetof(Vertex, Color),
+            },
+            OZZ::rendering::VertexInputAttributeDescriptor {
+                .Location = 2,
+                .Binding = 0,
+                .Format = OZZ::rendering::VertexFormat::Float2,
+                .Offset = offsetof(Vertex, TexCoord),
             },
         };
     }
@@ -153,6 +163,24 @@ int main() {
         },
     });
 
+    std::filesystem::path imagePath = std::filesystem::current_path() / "assets" / "images" / "texture.jpg";
+    int texWidth, texHeight, texChannels;
+    stbi_set_flip_vertically_on_load(true);
+    stbi_uc* pixels = stbi_load(imagePath.c_str(), &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
+    VkDeviceSize imageSize = texWidth * texHeight * 4;
+
+    if (!pixels) {
+        throw std::runtime_error("failed to load texture image!");
+    }
+
+    auto texture = rhiDevice->CreateTexture(OZZ::rendering::TextureDescriptor {
+        .Width = static_cast<uint32_t>(texWidth),
+        .Height = static_cast<uint32_t>(texHeight),
+        .Format = OZZ::rendering::TextureFormat::RGBA8,
+        .Usage = OZZ::rendering::TextureUsage::Sampled | OZZ::rendering::TextureUsage::TransferDst,
+    });
+
+    rhiDevice->UpdateTexture(texture, pixels, imageSize);
     std::filesystem::path base = std::filesystem::current_path() / "assets" / "shaders" / "basic";
     shader = rhiDevice->CreateShader(OZZ::rendering::ShaderFileParams {
         .Vertex = base / "basic.vert",
@@ -188,9 +216,21 @@ int main() {
 
     rhiDevice->UpdateBuffer(vertexBuffer,
                             std::array {
-                                Vertex {{0.f, -0.5f, 0.0f}, {1.f, 1.f, 0.f, 1.f}},
-                                Vertex {{0.5f, 0.5f, 0.0f}, {0.f, 1.f, 1.f, 1.f}},
-                                Vertex {{-0.5f, 0.5f, 0.0f}, {0.f, 0.f, 1.f, 1.f}},
+                                Vertex {
+                                    {0.f, -0.5f, 0.0f},
+                                    {1.f, 1.f, 0.f, 1.f},
+                                    {0.5f, 1.f},
+                                },
+                                Vertex {
+                                    {0.5f, 0.5f, 0.0f},
+                                    {0.f, 1.f, 1.f, 1.f},
+                                    {1.f, 0.f},
+                                },
+                                Vertex {
+                                    {-0.5f, 0.5f, 0.0f},
+                                    {0.f, 0.f, 1.f, 1.f},
+                                    {0.f, 0.f},
+                                },
                             }
                                 .data(),
                             sizeof(Vertex) * 3,
@@ -233,8 +273,8 @@ int main() {
     }
 
     // Create and populate descriptor set for the UBO (set=0, binding=0)
-    auto descriptorSet = rhiDevice->CreateDescriptorSet(*descriptorSetLayoutHandles.begin());
-    if (!descriptorSet.IsValid()) {
+    auto uboDescriptorSet = rhiDevice->CreateDescriptorSet(*descriptorSetLayoutHandles.begin());
+    if (!uboDescriptorSet.IsValid()) {
         spdlog::error("Failed to create descriptor set");
         return 1;
     }
@@ -244,8 +284,13 @@ int main() {
             .Type = OZZ::rendering::DescriptorType::UniformBuffer,
             .Buffer = {.Buffer = uboBuffer, .Offset = 0, .Range = sizeof(UBOObject)},
         },
+        OZZ::rendering::RHIDescriptorWrite {
+            .Binding = 1,
+            .Type = OZZ::rendering::DescriptorType::CombinedImageSampler,
+            .Image = {texture},
+        },
     };
-    rhiDevice->UpdateDescriptorSet(descriptorSet, uboWrites);
+    rhiDevice->UpdateDescriptorSet(uboDescriptorSet, uboWrites);
 
     while (!glfwWindowShouldClose(window)) {
 
@@ -257,25 +302,26 @@ int main() {
         auto context = rhiDevice->BeginFrame();
         renderPassDescriptor.ColorAttachments[0].Texture = context.GetBackbuffer();
         rhiDevice->BeginRenderPass(context, renderPassDescriptor);
-        rhiDevice->SetGraphicsState(context,
-                                    {
-                                        .Rasterization =
-                                            {
-                                                .Cull = OZZ::rendering::CullMode::None,
-                                                .Front = OZZ::rendering::FrontFace::CounterClockwise,
-                                            },
-                                        .ColorBlend = {{
-                                            .BlendEnable = false,
-                                        }},
-                                        .ColorBlendAttachmentCount = 1,
-                                        .VertexInput =
-                                            {
-                                                .Bindings = {bindingDescriptions},
-                                                .BindingCount = 1,
-                                                .Attributes = {attributeDescriptions[0], attributeDescriptions[1]},
-                                                .AttributeCount = attributeDescriptions.size(),
-                                            },
-                                    });
+        rhiDevice->SetGraphicsState(
+            context,
+            {
+                .Rasterization =
+                    {
+                        .Cull = OZZ::rendering::CullMode::None,
+                        .Front = OZZ::rendering::FrontFace::CounterClockwise,
+                    },
+                .ColorBlend = {{
+                    .BlendEnable = false,
+                }},
+                .ColorBlendAttachmentCount = 1,
+                .VertexInput =
+                    {
+                        .Bindings = {bindingDescriptions},
+                        .BindingCount = 1,
+                        .Attributes = {attributeDescriptions[0], attributeDescriptions[1], attributeDescriptions[2]},
+                        .AttributeCount = attributeDescriptions.size(),
+                    },
+            });
         rhiDevice->SetViewport(context,
                                {
                                    .X = 0,
@@ -293,10 +339,13 @@ int main() {
                                   .Height = WINDOW_HEIGHT,
                               });
         rhiDevice->BindShader(context, shader);
-        rhiDevice->BindDescriptorSet(context, pipelineLayoutHandle, 0, descriptorSet);
-        rhiDevice->SetPushConstants(context, pipelineLayoutHandle,
+        rhiDevice->BindDescriptorSet(context, pipelineLayoutHandle, 0, uboDescriptorSet);
+        rhiDevice->SetPushConstants(context,
+                                    pipelineLayoutHandle,
                                     OZZ::rendering::ShaderStageFlags::Vertex,
-                                    0, sizeof(currentModel), &currentModel);
+                                    0,
+                                    sizeof(currentModel),
+                                    &currentModel);
 
         rhiDevice->BindBuffer(context, vertexBuffer);
         rhiDevice->BindBuffer(context, indexBuffer);

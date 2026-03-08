@@ -50,6 +50,7 @@ namespace OZZ::rendering::vk {
             // this is the case for swapchain images, which are owned by the swapchain and just wrapped in a texture for
             // ease of use
             if (texture.Allocation != VK_NULL_HANDLE) {
+                vkDestroySampler(device, texture.Sampler, nullptr);
                 vkDestroyImageView(device, texture.ImageView, nullptr);
                 vmaDestroyImage(vmaAllocator, texture.Image, texture.Allocation);
                 texture.Image = VK_NULL_HANDLE;
@@ -109,7 +110,10 @@ namespace OZZ::rendering::vk {
             graphicsQueue = VK_NULL_HANDLE;
         }
 
-        // clear resource pools (shaders first — their destroy lambda frees owned layouts)
+        for (const auto buffer : transientCommandBuffers) {
+            vkFreeCommandBuffers(device, transientCommandBufferPool, 1, &buffer);
+        }
+        transientCommandBuffers.clear();
         commandBufferResourcePool.Empty();
         shaderResourcePool.Empty();
         descriptorSetResourcePool.Empty();
@@ -133,9 +137,17 @@ namespace OZZ::rendering::vk {
         spdlog::trace("cleared submission contexts");
 
         if (commandBufferPool != VK_NULL_HANDLE) {
+            vkResetCommandPool(device, commandBufferPool, 0);
             vkDestroyCommandPool(device, commandBufferPool, nullptr);
             spdlog::trace("Destroyed command buffer pool");
             commandBufferPool = VK_NULL_HANDLE;
+        }
+
+        if (transientCommandBufferPool != VK_NULL_HANDLE) {
+            vkResetCommandPool(device, transientCommandBufferPool, 0);
+            vkDestroyCommandPool(device, transientCommandBufferPool, nullptr);
+            spdlog::trace("Destroyed transient command buffer pool");
+            transientCommandBufferPool = VK_NULL_HANDLE;
         }
 
         for (auto semaphore : presentCompleteSemaphores) {
@@ -439,6 +451,7 @@ namespace OZZ::rendering::vk {
             .features =
                 VkPhysicalDeviceFeatures {
                     .geometryShader = VK_TRUE,
+                    .samplerAnisotropy = VK_TRUE,
                 },
         };
 
@@ -591,7 +604,14 @@ namespace OZZ::rendering::vk {
             return false;
         };
 
-        spdlog::trace("created command buffer pool");
+        if (const auto result =
+                vkCreateCommandPool(device, &commandPoolCreateInfo, nullptr, &transientCommandBufferPool);
+            result != VK_SUCCESS) {
+            spdlog::error("Failed to create transient command buffer pool, error code: {}", static_cast<int>(result));
+            return false;
+        }
+
+        spdlog::trace("created command buffer pools");
         return true;
     }
 
@@ -689,6 +709,84 @@ namespace OZZ::rendering::vk {
 
         spdlog::trace("Descriptor pool created");
         return true;
+    }
+
+    VkCommandBuffer RHIDeviceVulkan::beginSingleTimeCommands() {
+        VkCommandBufferAllocateInfo allocateInfo {
+            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+            .commandPool = transientCommandBufferPool,
+            .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+            .commandBufferCount = 1,
+        };
+
+        VkCommandBuffer commandBuffer;
+        if (const auto result = vkAllocateCommandBuffers(device, &allocateInfo, &commandBuffer); result != VK_SUCCESS) {
+            spdlog::error("Failed to allocate command buffer for single time commands. Error: {}",
+                          static_cast<int>(result));
+            return VK_NULL_HANDLE;
+        }
+
+        VkCommandBufferBeginInfo beginInfo {
+            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+            .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+            .pInheritanceInfo = nullptr,
+        };
+
+        if (const auto result = vkBeginCommandBuffer(commandBuffer, &beginInfo); result != VK_SUCCESS) {
+            spdlog::error("Failed to begin command buffer for single time commands. Error: {}",
+                          static_cast<int>(result));
+            return VK_NULL_HANDLE;
+        }
+
+        transientCommandBuffers.insert(commandBuffer);
+        return commandBuffer;
+    }
+
+    void RHIDeviceVulkan::endSingleTimeCommands(VkCommandBuffer commandBuffer) {
+        const auto cleanCommandBuffer = [this](VkCommandBuffer cmdBuffer) {
+            const auto commandBufferCopy = cmdBuffer;
+            vkFreeCommandBuffers(device, transientCommandBufferPool, 1, &cmdBuffer);
+            transientCommandBuffers.erase(commandBufferCopy);
+        };
+
+        if (const auto result = vkEndCommandBuffer(commandBuffer); result != VK_SUCCESS) {
+            spdlog::error("Failed to end command buffer for single time commands. Error: {}", static_cast<int>(result));
+            cleanCommandBuffer(commandBuffer);
+            return;
+        }
+
+        VkSubmitInfo submitInfo {
+            .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+            .commandBufferCount = 1,
+            .pCommandBuffers = &commandBuffer,
+        };
+
+        // create a fence
+        VkFenceCreateInfo fenceCreateInfo {
+            .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+        };
+
+        VkFence submitFence;
+        if (const auto result = vkCreateFence(device, &fenceCreateInfo, nullptr, &submitFence); result != VK_SUCCESS) {
+            spdlog::error("Failed to create fence for single time command submission. Error: {}",
+                          static_cast<int>(result));
+            // destroy the command buffer before returning
+            cleanCommandBuffer(commandBuffer);
+            return;
+        }
+
+        if (const auto result = vkQueueSubmit(graphicsQueue, 1, &submitInfo, submitFence); result != VK_SUCCESS) {
+            spdlog::error("Failed to submit command buffer for single time commands. Error: {}",
+                          static_cast<int>(result));
+            return;
+        }
+
+        vkWaitForFences(device, 1, &submitFence, VK_TRUE, UINT64_MAX);
+        vkDestroyFence(device, submitFence, nullptr);
+
+        cleanCommandBuffer(commandBuffer);
     }
 
     // ============================================================
@@ -1297,9 +1395,14 @@ namespace OZZ::rendering::vk {
                 });
                 vkWrite.pBufferInfo = &bufferInfos.back();
             } else {
-                spdlog::error("UpdateDescriptorSet: descriptor type {} not yet implemented",
-                              static_cast<int>(write.Type));
-                continue;
+                const auto texture = texturePool.Get(write.Image.Texture);
+                VkDescriptorImageInfo imageInfo {
+                    .sampler = texture->Sampler,
+                    .imageView = texture->ImageView,
+                    .imageLayout = ConvertTextureLayoutToVulkan(TextureLayout::ShaderReadOnly),
+                };
+
+                vkWrite.pImageInfo = &imageInfo;
             }
 
             vkWrites.push_back(vkWrite);
@@ -1316,8 +1419,176 @@ namespace OZZ::rendering::vk {
     // === Resource Creation ===
     // ============================================================
 
-    RHITextureHandle RHIDeviceVulkan::CreateTexture() {
-        return RHITextureHandle::Null();
+    RHITextureHandle RHIDeviceVulkan::CreateTexture(TextureDescriptor&& descriptor) {
+        VkImageCreateInfo imageCreateInfo {
+            .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .imageType = VK_IMAGE_TYPE_2D,
+            .format = ConvertTextureFormatToVulkan(descriptor.Format),
+            .extent =
+                {
+                    .width = descriptor.Width,
+                    .height = descriptor.Height,
+                    .depth = 1,
+                },
+            .mipLevels = 1,
+            .arrayLayers = 1,
+            .samples = VK_SAMPLE_COUNT_1_BIT,
+            .tiling = VK_IMAGE_TILING_OPTIMAL,
+            .usage = ConvertTextureUsageToVulkan(descriptor.Usage),
+            .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+            .queueFamilyIndexCount = 0,
+            .pQueueFamilyIndices = nullptr,
+            .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+        };
+
+        VmaAllocationCreateInfo allocationCreateInfo {
+            .flags = 0,
+            .usage = VMA_MEMORY_USAGE_GPU_ONLY,
+        };
+
+        RHITextureVulkan texture {
+            .Format = ConvertTextureFormatToVulkan(descriptor.Format),
+            .Width = descriptor.Width,
+            .Height = descriptor.Height,
+        };
+        if (auto result = vmaCreateImage(vmaAllocator,
+                                         &imageCreateInfo,
+                                         &allocationCreateInfo,
+                                         &texture.Image,
+                                         &texture.Allocation,
+                                         &texture.AllocationInfo);
+            result != VK_SUCCESS) {
+            spdlog::error("Failed to create image for texture. Error: {}", static_cast<int>(result));
+            return RHITextureHandle::Null();
+        }
+
+        // Texture is on device, let's make our sample and image view
+        VkImageViewCreateInfo viewCreateInfo {
+            .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .image = texture.Image,
+            .viewType = VK_IMAGE_VIEW_TYPE_2D,
+            .format = ConvertTextureFormatToVulkan(descriptor.Format),
+            .components =
+                {
+                    VK_COMPONENT_SWIZZLE_IDENTITY,
+                    VK_COMPONENT_SWIZZLE_IDENTITY,
+                    VK_COMPONENT_SWIZZLE_IDENTITY,
+                    VK_COMPONENT_SWIZZLE_IDENTITY,
+                },
+            .subresourceRange =
+                {
+                    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                    .baseMipLevel = 0,
+                    .levelCount = 1,
+                    .baseArrayLayer = 0,
+                    .layerCount = 1,
+                },
+        };
+
+        if (const auto result = vkCreateImageView(device, &viewCreateInfo, nullptr, &texture.ImageView);
+            result != VK_SUCCESS) {
+            spdlog::error("Failed to create image view for texture. Error: {}", static_cast<int>(result));
+            vmaDestroyImage(vmaAllocator, texture.Image, texture.Allocation);
+            return RHITextureHandle::Null();
+        }
+
+        VkSamplerCreateInfo samplerCreateInfo {
+            .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .magFilter = ConvertSamplerFilterToVulkan(descriptor.Sampler.MagFilter),
+            .minFilter = ConvertSamplerFilterToVulkan(descriptor.Sampler.MinFilter),
+            .mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR,
+            .addressModeU = ConvertSamplerAddressModeToVulkan(descriptor.Sampler.WrapU),
+            .addressModeV = ConvertSamplerAddressModeToVulkan(descriptor.Sampler.WrapV),
+            .addressModeW = ConvertSamplerAddressModeToVulkan(descriptor.Sampler.WrapW),
+            .mipLodBias = 0.f,
+            .anisotropyEnable = VK_TRUE,
+            .maxAnisotropy = physicalDevices.SelectedDevice().Properties.properties.limits.maxSamplerAnisotropy,
+            .compareEnable = VK_FALSE,
+            .compareOp = VK_COMPARE_OP_ALWAYS,
+            .minLod = 0.f,
+            .maxLod = 0.f,
+            .borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK,
+            .unnormalizedCoordinates = VK_FALSE,
+        };
+
+        if (const auto result = vkCreateSampler(device, &samplerCreateInfo, nullptr, &texture.Sampler);
+            result != VK_SUCCESS) {
+            spdlog::error("Failed to create sampler for texture. Error: {}", static_cast<int>(result));
+            vkDestroyImageView(device, texture.ImageView, nullptr);
+            vmaDestroyImage(vmaAllocator, texture.Image, texture.Allocation);
+            return RHITextureHandle::Null();
+        }
+        return texturePool.Allocate(std::move(texture));
+    }
+
+    void RHIDeviceVulkan::UpdateTexture(const RHITextureHandle& handle, const void* data, size_t size) {
+        // Create a staging buffer
+        auto stagingBufferHandle =
+            CreateBuffer({.Size = size, .Usage = BufferUsage::TransferSource, .Access = BufferMemoryAccess::CpuToGpu});
+
+        // Map the staging buffer and copy the data
+        const auto* stagingBuffer = bufferResourcePool.Get(stagingBufferHandle);
+        if (!stagingBuffer) {
+            spdlog::error("Failed to get staging buffer for texture update. Handle is invalid.");
+            return;
+        }
+        void* mapped = (*stagingBuffer)[0].AllocationInfo.pMappedData;
+        memcpy(mapped, data, size);
+        // copy from staging buffer to texture using a command buffer and appropriate barriers
+        auto immediateCmd = beginSingleTimeCommands();
+
+        auto texture = texturePool.Get(handle);
+        VkBufferImageCopy region {};
+        region.bufferOffset = 0;
+        region.bufferRowLength = 0;
+        region.bufferImageHeight = 0;
+
+        region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        region.imageSubresource.mipLevel = 0;
+        region.imageSubresource.baseArrayLayer = 0;
+        region.imageSubresource.layerCount = 1;
+
+        region.imageOffset = {0, 0, 0};
+        region.imageExtent = {texture->Width, texture->Height, 1};
+        textureResourceBarrierInternal(immediateCmd,
+                                       TextureBarrierDescriptor {
+                                           .Texture = handle,
+                                           .OldLayout = TextureLayout::Undefined,
+                                           .NewLayout = TextureLayout::TransferDst,
+                                           .SrcStage = PipelineStage::None,
+                                           .DstStage = PipelineStage::Transfer,
+                                           .SrcAccess = Access::None,
+                                           .DstAccess = Access::TransferWrite,
+                                       });
+        vkCmdCopyBufferToImage(immediateCmd,
+                               (*stagingBuffer)[0].Buffer,
+                               texturePool.Get(handle)->Image,
+                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                               1,
+                               &region);
+        textureResourceBarrierInternal(immediateCmd,
+                                       TextureBarrierDescriptor {
+                                           .Texture = handle,
+                                           .OldLayout = TextureLayout::TransferDst,
+                                           .NewLayout = TextureLayout::ShaderReadOnly,
+                                           .SrcStage = PipelineStage::Transfer,
+                                           .DstStage = PipelineStage::AllGraphics,
+                                           .SrcAccess = Access::TransferWrite,
+                                           .DstAccess = Access::ShaderRead,
+                                       });
+        endSingleTimeCommands(immediateCmd);
+
+        bufferResourcePool.Free(stagingBufferHandle);
+    }
+
+    void RHIDeviceVulkan::FreeTexture(RHITextureHandle handle) {
+        texturePool.Free(handle);
     }
 
     RHIShaderHandle RHIDeviceVulkan::CreateShader(ShaderFileParams&& shaderFiles) {

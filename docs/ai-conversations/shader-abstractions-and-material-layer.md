@@ -2,28 +2,36 @@
 
 ## Context
 
-This documents the API design for shader abstractions in the `ozz_rendering` RHI layer and the decision on where `Material` lives.
+This documents the API design for shader abstractions in the `ozz_rendering` RHI layer and the decision on where
+`Material` lives.
 
 **Constraints:**
-- Backend: Vulkan via `VK_EXT_shader_object` — **no pipeline objects** (`VkPipeline`). Shaders are `VkShaderEXT` objects per stage, bound independently.
-- Rendering: `VK_KHR_dynamic_rendering` — **no `VkRenderPass` objects**. Already reflected in the existing `BeginRenderPass`/`EndRenderPass` API which wraps `vkCmdBeginRendering`.
-- All graphics state (topology, rasterization, depth/stencil, vertex input, blend) is set dynamically via `vkCmdSetXxx`. Already reflected in `SetGraphicsState(cmd, GraphicsStateDescriptor)`.
+
+- Backend: Vulkan via `VK_EXT_shader_object` — **no pipeline objects** (`VkPipeline`). Shaders are `VkShaderEXT` objects
+  per stage, bound independently.
+- Rendering: `VK_KHR_dynamic_rendering` — **no `VkRenderPass` objects**. Already reflected in the existing
+  `BeginRenderPass`/`EndRenderPass` API which wraps `vkCmdBeginRendering`.
+- All graphics state (topology, rasterization, depth/stencil, vertex input, blend) is set dynamically via `vkCmdSetXxx`.
+  Already reflected in `SetGraphicsState(cmd, GraphicsStateDescriptor)`.
 - RHI handle pattern (`RHIHandle<Tag>`) already established.
 
 ---
 
 ## Architectural Decision: Material Lives at the Engine Level
 
-**The RHI layer is the GPU API boundary.** It knows about shaders, buffers, textures, and command encoding — but not about "materials" as a content/engine concept.
+**The RHI layer is the GPU API boundary.** It knows about shaders, buffers, textures, and command encoding — but not
+about "materials" as a content/engine concept.
 
 **Material is an engine-level object** that composes multiple RHI primitives:
+
 - Which shader stages are bound
 - What graphics state to set
 - What resources (buffers, textures, samplers) are bound and at which descriptor slots
 
 The RHI has no concept of a material. The engine builds one from RHI primitives.
 
-This mirrors the `VK_EXT_shader_object` philosophy itself: instead of a monolithic pipeline object that bakes everything together, you compose independently-managed pieces.
+This mirrors the `VK_EXT_shader_object` philosophy itself: instead of a monolithic pipeline object that bakes everything
+together, you compose independently-managed pieces.
 
 ---
 
@@ -59,7 +67,9 @@ virtual RHIShaderHandle CreateShader(const ShaderStageDescriptor&) = 0;
 virtual void            DestroyShader(RHIShaderHandle) = 0;
 ```
 
-**Vulkan mapping:** `vkCreateShadersEXT` — one `VkShaderEXT` per stage. The existing `VulkanShader` in `scratch/` already compiles GLSL → SPIR-V via glslang and creates `VkShaderEXT` objects; that logic moves into the backend implementation.
+**Vulkan mapping:** `vkCreateShadersEXT` — one `VkShaderEXT` per stage. The existing `VulkanShader` in `scratch/`
+already compiles GLSL → SPIR-V via glslang and creates `VkShaderEXT` objects; that logic moves into the backend
+implementation.
 
 ---
 
@@ -77,7 +87,8 @@ struct ShaderBindingDescriptor {
 virtual void BindShaders(const RHICommandBufferHandle&, const ShaderBindingDescriptor&) = 0;
 ```
 
-**Vulkan mapping:** `vkCmdBindShadersEXT(cmd, stageCount, stages[], shaders[])`. Null handles bind `VK_NULL_HANDLE` (unbinding that stage).
+**Vulkan mapping:** `vkCmdBindShadersEXT(cmd, stageCount, stages[], shaders[])`. Null handles bind `VK_NULL_HANDLE` (
+unbinding that stage).
 
 ---
 
@@ -143,7 +154,8 @@ enum class IndexType { UInt16, UInt32 };
 
 ### 6. Descriptor / Resource Binding
 
-With `VK_EXT_shader_object`, descriptor sets still exist — or push descriptors (`VK_KHR_push_descriptor`) can be used to avoid managing `VkDescriptorPool`. Push descriptors are simpler for a first pass:
+With `VK_EXT_shader_object`, descriptor sets still exist — or push descriptors (`VK_KHR_push_descriptor`) can be used to
+avoid managing `VkDescriptorPool`. Push descriptors are simpler for a first pass:
 
 ```cpp
 // rhi_types.h
@@ -219,35 +231,36 @@ Material::Bind(RHIDevice&, RHICommandBufferHandle):
   3. device.PushDescriptorSet(cmd, bindings)
 ```
 
-`Material` has no Vulkan knowledge. It constructs descriptors from RHI handles. The engine may also hold per-draw push constants separately (a model matrix is not part of the material; it's per-draw).
+`Material` has no Vulkan knowledge. It constructs descriptors from RHI handles. The engine may also hold per-draw push
+constants separately (a model matrix is not part of the material; it's per-draw).
 
 ---
 
 ## What Already Exists (No Changes Needed)
 
-| Already in RHI | Notes |
-|---|---|
-| `SetGraphicsState(cmd, GraphicsStateDescriptor)` | Covers all dynamic state: topology, raster, depth/stencil, multisample, blend, vertex input |
-| `BeginRenderPass` / `EndRenderPass` | Maps to `vkCmdBeginRendering` / `vkCmdEndRendering` — dynamic rendering |
-| `TextureResourceBarrier` | Layout transitions |
-| `SetViewport` / `SetScissor` | |
-| `Draw` / `DrawIndexed` | |
-| `CreateTexture` / `RHITextureHandle` | Texture resource (image + imageview) |
-| `RHIHandle<Tag>` pattern | Generational handles with resource pools |
-| `FrameContext` (BeginFrame / SubmitAndPresentFrame) | Frame lifecycle |
+| Already in RHI                                      | Notes                                                                                       |
+|-----------------------------------------------------|---------------------------------------------------------------------------------------------|
+| `SetGraphicsState(cmd, GraphicsStateDescriptor)`    | Covers all dynamic state: topology, raster, depth/stencil, multisample, blend, vertex input |
+| `BeginRenderPass` / `EndRenderPass`                 | Maps to `vkCmdBeginRendering` / `vkCmdEndRendering` — dynamic rendering                     |
+| `TextureResourceBarrier`                            | Layout transitions                                                                          |
+| `SetViewport` / `SetScissor`                        |                                                                                             |
+| `Draw` / `DrawIndexed`                              |                                                                                             |
+| `CreateTexture` / `RHITextureHandle`                | Texture resource (image + imageview)                                                        |
+| `RHIHandle<Tag>` pattern                            | Generational handles with resource pools                                                    |
+| `FrameContext` (BeginFrame / SubmitAndPresentFrame) | Frame lifecycle                                                                             |
 
 ---
 
 ## Summary of Additions to RHI
 
-| Addition | Reason |
-|---|---|
-| `CreateShader` / `DestroyShader` | Load GLSL/SPIR-V per stage into `VkShaderEXT` |
-| `BindShaders` | `vkCmdBindShadersEXT` per-frame encoding |
-| `CreateBuffer` / `DestroyBuffer` / `MapBuffer` / `UnmapBuffer` | Vertex, index, UBO, SSBO resources |
-| `BindVertexBuffer` / `BindIndexBuffer` | Geometry binding |
-| `PushDescriptorSet` | Resource binding without descriptor pool management |
-| `PushConstants` | Lightweight per-draw data (model matrix, etc.) |
+| Addition                                                       | Reason                                              |
+|----------------------------------------------------------------|-----------------------------------------------------|
+| `CreateShader` / `DestroyShader`                               | Load GLSL/SPIR-V per stage into `VkShaderEXT`       |
+| `BindShaders`                                                  | `vkCmdBindShadersEXT` per-frame encoding            |
+| `CreateBuffer` / `DestroyBuffer` / `MapBuffer` / `UnmapBuffer` | Vertex, index, UBO, SSBO resources                  |
+| `BindVertexBuffer` / `BindIndexBuffer`                         | Geometry binding                                    |
+| `PushDescriptorSet`                                            | Resource binding without descriptor pool management |
+| `PushConstants`                                                | Lightweight per-draw data (model matrix, etc.)      |
 
 ---
 

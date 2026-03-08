@@ -56,10 +56,10 @@ namespace OZZ::rendering {
     };
 
     enum class SampleCount {
-        Count1  = 1,
-        Count2  = 2,
-        Count4  = 4,
-        Count8  = 8,
+        Count1 = 1,
+        Count2 = 2,
+        Count4 = 4,
+        Count8 = 8,
         Count16 = 16,
     };
 
@@ -67,6 +67,8 @@ namespace OZZ::rendering {
         None,
         ColorAttachmentOutput,
         Transfer,
+        VertexShader,
+        FragmentShader,
         AllGraphics,
         AllCommands,
     };
@@ -87,20 +89,20 @@ namespace OZZ::rendering {
     };
 
     struct TextureSubresourceRange {
-        TextureAspect Aspect         {TextureAspect::Color};
-        uint32_t      BaseMipLevel   {0};
-        uint32_t      LevelCount     {1};
-        uint32_t      BaseArrayLayer {0};
-        uint32_t      LayerCount     {1};
+        TextureAspect Aspect {TextureAspect::Color};
+        uint32_t BaseMipLevel {0};
+        uint32_t LevelCount {1};
+        uint32_t BaseArrayLayer {0};
+        uint32_t LayerCount {1};
     };
 
     inline constexpr uint32_t QueueFamilyIgnored = ~0u;
 
     enum class ColorComponent : uint8_t {
-        R   = 1 << 0,
-        G   = 1 << 1,
-        B   = 1 << 2,
-        A   = 1 << 3,
+        R = 1 << 0,
+        G = 1 << 1,
+        B = 1 << 2,
+        A = 1 << 3,
         All = 0xF,
     };
 
@@ -127,27 +129,27 @@ namespace OZZ::rendering {
     };
 
     struct ClearValue {
-        float    R       {0.f};
-        float    G       {0.f};
-        float    B       {0.f};
-        float    A       {1.f};
-        float    Depth   {1.f};
+        float R {0.f};
+        float G {0.f};
+        float B {0.f};
+        float A {1.f};
+        float Depth {1.f};
         uint32_t Stencil {0};
     };
 
     struct Viewport {
-        float X        {0.f};
-        float Y        {0.f};
-        float Width    {0.f};
-        float Height   {0.f};
+        float X {0.f};
+        float Y {0.f};
+        float Width {0.f};
+        float Height {0.f};
         float MinDepth {0.f};
         float MaxDepth {1.f};
     };
 
     struct Scissor {
-        int32_t  X      {0};
-        int32_t  Y      {0};
-        uint32_t Width  {0};
+        int32_t X {0};
+        int32_t Y {0};
+        uint32_t Width {0};
         uint32_t Height {0};
     };
 

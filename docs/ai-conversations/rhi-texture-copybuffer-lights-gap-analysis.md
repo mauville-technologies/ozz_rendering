@@ -13,19 +13,19 @@ in Vulkan.
 
 Features in `lights/` are grouped by priority:
 
-| Priority | Feature | lights/ Usage | RHI Status |
-|----------|---------|--------------|------------|
-| P0 | One-time submit infrastructure | Implicit in every GL upload | Missing entirely |
-| P0 | `CreateTexture(TextureDescriptor)` | 2D textures, RGBA8/RGB8/R8 | Stub returns Null |
-| P0 | `UpdateTexture` | `glTexSubImage2D` uploads | No API |
-| P0 | `FreeTexture` | `glDeleteTextures` | No API |
-| P0 | `CombinedImageSampler` descriptor write | `uniform sampler2D` in shaders | Logs error, unimplemented |
-| P0 | Depth attachment in render pass | `GL_DEPTH_BUFFER_BIT`, depth testing | Asserts false |
-| P1 | Render-to-texture (FBO) | `RenderTarget` system | Falls out of `CreateTexture` |
-| P1 | `BufferMemoryBarrier` | SSBO read-after-write | Asserts false |
-| P1 | `ShaderStages` / `ShaderWrite` in barrier enums | Post-upload transitions | Missing enum values |
-| P2 | Blend src/dst factors | `GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA` | Only enable/disable |
-| P2 | Line width / point size | `glLineWidth`, `glPointSize` | Not in `GraphicsStateDescriptor` |
+| Priority | Feature                                         | lights/ Usage                          | RHI Status                       |
+|----------|-------------------------------------------------|----------------------------------------|----------------------------------|
+| P0       | One-time submit infrastructure                  | Implicit in every GL upload            | Missing entirely                 |
+| P0       | `CreateTexture(TextureDescriptor)`              | 2D textures, RGBA8/RGB8/R8             | Stub returns Null                |
+| P0       | `UpdateTexture`                                 | `glTexSubImage2D` uploads              | No API                           |
+| P0       | `FreeTexture`                                   | `glDeleteTextures`                     | No API                           |
+| P0       | `CombinedImageSampler` descriptor write         | `uniform sampler2D` in shaders         | Logs error, unimplemented        |
+| P0       | Depth attachment in render pass                 | `GL_DEPTH_BUFFER_BIT`, depth testing   | Asserts false                    |
+| P1       | Render-to-texture (FBO)                         | `RenderTarget` system                  | Falls out of `CreateTexture`     |
+| P1       | `BufferMemoryBarrier`                           | SSBO read-after-write                  | Asserts false                    |
+| P1       | `ShaderStages` / `ShaderWrite` in barrier enums | Post-upload transitions                | Missing enum values              |
+| P2       | Blend src/dst factors                           | `GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA` | Only enable/disable              |
+| P2       | Line width / point size                         | `glLineWidth`, `glPointSize`           | Not in `GraphicsStateDescriptor` |
 
 ---
 
@@ -39,11 +39,11 @@ manages all synchronization. Vulkan makes this explicit.
 
 Vulkan (via VMA) exposes three relevant memory archetypes:
 
-| Memory Type | VMA Flag | CPU Access | GPU Access | Use Case |
-|-------------|----------|------------|------------|----------|
-| `GpuOnly` | `VMA_MEMORY_USAGE_GPU_ONLY` | ❌ (no mapping) | Fast | Static geometry, textures, render targets |
-| `CpuToGpu` | `VMA_MEMORY_USAGE_CPU_TO_GPU` | ✅ mapped | Slower | Uniform buffers, per-frame data |
-| `GpuToCpu` | `VMA_MEMORY_USAGE_GPU_TO_CPU` | ✅ mapped | Slower | Readback |
+| Memory Type | VMA Flag                      | CPU Access     | GPU Access | Use Case                                  |
+|-------------|-------------------------------|----------------|------------|-------------------------------------------|
+| `GpuOnly`   | `VMA_MEMORY_USAGE_GPU_ONLY`   | ❌ (no mapping) | Fast       | Static geometry, textures, render targets |
+| `CpuToGpu`  | `VMA_MEMORY_USAGE_CPU_TO_GPU` | ✅ mapped       | Slower     | Uniform buffers, per-frame data           |
+| `GpuToCpu`  | `VMA_MEMORY_USAGE_GPU_TO_CPU` | ✅ mapped       | Slower     | Readback                                  |
 
 **The key rule**: images (`VkImage`) in Vulkan cannot be in `CpuToGpu` memory — they are
 always `GpuOnly`. There is no equivalent to `glTexSubImage2D` that writes directly from
@@ -70,12 +70,14 @@ This copy must be recorded into a command buffer and submitted to the GPU.
 Vulkan has two primary synchronization primitives:
 
 **Semaphores** (`VkSemaphore`) — GPU-to-GPU synchronization:
+
 - Signal on one queue, wait on another queue (or same queue, different submit)
 - Used for: swapchain image acquisition → rendering, rendering → presentation
 - CPU cannot wait on a semaphore directly
 - Zero overhead if not used (they don't stall the GPU)
 
 **Fences** (`VkFence`) — GPU-to-CPU synchronization:
+
 - Signal when GPU finishes a submission
 - CPU waits via `vkWaitForFences`
 - Used for: "tell me when this command buffer has finished executing"

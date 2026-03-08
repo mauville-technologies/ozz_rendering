@@ -18,7 +18,8 @@ create a modern RHI (Render Hardware Interface) abstraction that:
 - **Resource Management**: Device creates and manages shaders, textures, buffers
 - **Command Buffers**: Single command buffer per frame, passed through render graph
 - **Backend Abstraction**: OpenGL and Vulkan implementations behind common interface
-- **Ownership**: `LightsGame` owns both `RHIDevice` and `ResourceManager`; `ResourceManager` depends on `RHIDevice`, not the other way around
+- **Ownership**: `LightsGame` owns both `RHIDevice` and `ResourceManager`; `ResourceManager` depends on `RHIDevice`, not
+  the other way around
 
 ### Key Design Principles
 
@@ -30,7 +31,9 @@ create a modern RHI (Render Hardware Interface) abstraction that:
 
 ## Platform Bootstrap & Initialization
 
-Renderer initialization is tightly coupled to platform initialization — the window must exist before the graphics backend can create a surface or context. The correct sequence is: **platform → device → renderer → resource manager → scene**.
+Renderer initialization is tightly coupled to platform initialization — the window must exist before the graphics
+backend can create a surface or context. The correct sequence is: **platform → device → renderer → resource manager →
+scene**.
 
 ### Initialization Sequence
 
@@ -412,10 +415,13 @@ graph LR
 
 ## Generational Handle System Deep Dive
 
-The "generational" aspect is the key innovation that makes handles safe and prevents common resource management bugs. Here's how it works:
+The "generational" aspect is the key innovation that makes handles safe and prevents common resource management bugs.
+Here's how it works:
 
 ### The Core Problem: Slot Reuse
+
 Without generations, handles are just indices into an array:
+
 ```cpp
 // BAD: Simple index-based handles
 struct SimpleHandle { uint32_t id; };
@@ -434,6 +440,7 @@ SimpleHandle CreateTexture() {
 ```
 
 **The Problem:** What happens when you reuse a slot?
+
 ```cpp
 auto handleA = CreateTexture();     // Gets slot 5 → {id: 5}
 DestroyTexture(handleA);            // Frees slot 5, adds to free list
@@ -445,6 +452,7 @@ auto handleB = CreateTexture();     // Reuses slot 5 → {id: 5}
 ```
 
 ### The Solution: Generation Counter
+
 Add a generation counter that increments each time a slot is reused:
 
 ```cpp
@@ -482,6 +490,7 @@ RHIHandle CreateTexture() {
 ### Step-by-Step Example
 
 **Step 1: Create first texture**
+
 ```cpp
 auto handleA = CreateTexture();  // Returns {id: 5, generation: 1}
 
@@ -490,6 +499,7 @@ auto handleA = CreateTexture();  // Returns {id: 5, generation: 1}
 ```
 
 **Step 2: Destroy texture**
+
 ```cpp
 DestroyTexture(handleA);
 
@@ -499,6 +509,7 @@ DestroyTexture(handleA);
 ```
 
 **Step 3: Create second texture (reuses slot)**
+
 ```cpp
 auto handleB = CreateTexture();  // Returns {id: 5, generation: 2}
 
@@ -509,6 +520,7 @@ auto handleB = CreateTexture();  // Returns {id: 5, generation: 2}
 ```
 
 **Step 4: Try to use old handle**
+
 ```cpp
 // Someone still has the old handleA = {id: 5, generation: 1}
 Texture* tex = GetTexture(handleA);
@@ -528,6 +540,7 @@ bool IsValidHandle(RHIHandle handle) {
 ### Why This Prevents Bugs
 
 **1. Use-After-Free Prevention**
+
 ```cpp
 auto texture = CreateTexture();
 DestroyTexture(texture);
@@ -538,11 +551,13 @@ BindTexture(texture);  // Safe! Returns error instead of corrupting memory
 
 **2. ABA Problem Prevention**
 The ABA problem occurs when:
+
 - Thread A reads value A
-- Thread B changes A to B, then back to A  
+- Thread B changes A to B, then back to A
 - Thread A thinks nothing changed
 
 With generations:
+
 ```cpp
 // Thread A gets handle
 auto handleA = CreateTexture();  // {id: 5, gen: 3}
@@ -556,6 +571,7 @@ UseTexture(handleA);  // Returns error, doesn't use wrong texture
 ```
 
 **3. Debug Safety**
+
 ```cpp
 // Easy to detect stale handle usage in debug builds
 bool IsValidHandle(RHIHandle handle) {
@@ -576,6 +592,7 @@ bool IsValidHandle(RHIHandle handle) {
 ### Memory Layout Optimization
 
 **Packed Representation (32-bit handle):**
+
 ```cpp
 struct RHIHandle {
     union {
@@ -589,6 +606,7 @@ struct RHIHandle {
 ```
 
 **Benefits:**
+
 - Handle fits in 32 bits (same as a pointer on 32-bit systems)
 - Cheap to copy (single integer)
 - Fast comparison (single integer comparison)
@@ -597,6 +615,7 @@ struct RHIHandle {
 ### Generation Overflow Handling
 
 What happens when generation counter overflows?
+
 ```cpp
 constexpr uint32_t MAX_GENERATION = 255;  // 8-bit counter
 
@@ -623,12 +642,14 @@ uint32_t AllocateSlot() {
 ### Real-World Comparison
 
 **Similar systems:**
+
 - **Entity Component Systems**: Entity handles work exactly the same way
 - **Vulkan**: VkObjectType handles are similar (but less safe)
 - **DirectX 12**: Resource descriptors use generational handles
 - **Game Engines**: Unity's InstanceID, Unreal's UObject handles
 
 **Traditional alternative:**
+
 ```cpp
 // Old way: Raw pointers (unsafe)
 Texture* CreateTexture();  // Returns pointer that can become dangling
@@ -637,7 +658,8 @@ Texture* CreateTexture();  // Returns pointer that can become dangling
 RHITextureHandle CreateTexture();  // Returns handle that validates on access
 ```
 
-The generational system trades a small amount of memory (extra generation counter) and CPU time (generation check) for significant safety gains and easier debugging.
+The generational system trades a small amount of memory (extra generation counter) and CPU time (generation check) for
+significant safety gains and easier debugging.
 
 ## Technical Considerations
 
@@ -761,9 +783,11 @@ public:
 
 ## Frame Lifecycle & Backbuffer Access
 
-Swapchain acquisition happens inside `BeginFrame()`, which returns a `FrameContext` token. App/renderer code never sees raw swapchain images or image indices — only opaque handles and command buffers.
+Swapchain acquisition happens inside `BeginFrame()`, which returns a `FrameContext` token. App/renderer code never sees
+raw swapchain images or image indices — only opaque handles and command buffers.
 
-`FrameContext` is only constructable by `RHIDevice` (via `friend`), and its internal swapchain fields are private. The renderer is the sole caller of `BeginFrame`/`EndFrame`; renderables only ever see `RenderParams`.
+`FrameContext` is only constructable by `RHIDevice` (via `friend`), and its internal swapchain fields are private. The
+renderer is the sole caller of `BeginFrame`/`EndFrame`; renderables only ever see `RenderParams`.
 
 ```cpp
 // ------------------------------------------------------------------

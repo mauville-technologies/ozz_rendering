@@ -2,7 +2,8 @@
 
 ## Summary
 
-Recommended concrete shape for an RHIBufferVulkan (fields + helper APIs) and a safe GetDescriptor() implementation that accounts for suballocations and clamps the returned range.
+Recommended concrete shape for an RHIBufferVulkan (fields + helper APIs) and a safe GetDescriptor() implementation that
+accounts for suballocations and clamps the returned range.
 
 ---
 
@@ -51,14 +52,17 @@ struct RHIBufferVulkan {
 ```
 
 Notes:
+
 - Store `Usage` and `Access` so the allocator/manager can pick VMA flags and choose mapping/staging strategies.
-- Prefer suballocation/ring allocators for dynamic per-frame uploads; represent slices with `IsSuballocated/SubOffset/SubRange`.
+- Prefer suballocation/ring allocators for dynamic per-frame uploads; represent slices with
+  `IsSuballocated/SubOffset/SubRange`.
 
 ---
 
 ## Safe GetDescriptor() implementation
 
-This implementation returns a VkDescriptorBufferInfo that points into the underlying VkBuffer, uses the suballocation slice if present, and clamps the returned range so it does not run past the allocation.
+This implementation returns a VkDescriptorBufferInfo that points into the underlying VkBuffer, uses the suballocation
+slice if present, and clamps the returned range so it does not run past the allocation.
 
 ```cpp
 VkDescriptorBufferInfo RHIBufferVulkan::GetDescriptor(VkDeviceSize offset, VkDeviceSize range) const {
@@ -95,12 +99,17 @@ VkDescriptorBufferInfo RHIBufferVulkan::GetDescriptor(VkDeviceSize offset, VkDev
 ### Behavior and edge cases
 
 - If `Buffer` is null, zeroed descriptor is returned.
-- If the buffer is a suballocation, the returned offset is `SubOffset + offset` and range is clamped to `SubRange - offset`.
-- If `range == VK_WHOLE_SIZE`, the descriptor range becomes the available bytes from `offset` to end of slice/allocation.
-- This helper is safe to use when writing descriptor sets and when generating descriptor info for draws; callers should still ensure alignment and binding-size rules required by Vulkan (e.g., range must be multiple of minAlignment when required).
+- If the buffer is a suballocation, the returned offset is `SubOffset + offset` and range is clamped to
+  `SubRange - offset`.
+- If `range == VK_WHOLE_SIZE`, the descriptor range becomes the available bytes from `offset` to end of
+  slice/allocation.
+- This helper is safe to use when writing descriptor sets and when generating descriptor info for draws; callers should
+  still ensure alignment and binding-size rules required by Vulkan (e.g., range must be multiple of minAlignment when
+  required).
 
 ---
 
 ## Small implementation note
 
-When the buffer is persistently mapped and non-coherent, remember to call `Flush` after CPU writes and `Invalidate` before CPU reads; `GetDescriptor()` does not touch mapping or synchronization — it's purely a descriptor helper.
+When the buffer is persistently mapped and non-coherent, remember to call `Flush` after CPU writes and `Invalidate`
+before CPU reads; `GetDescriptor()` does not touch mapping or synchronization — it's purely a descriptor helper.
