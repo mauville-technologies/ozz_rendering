@@ -1,14 +1,17 @@
 project(ozz_rendering_third_party)
 include(FetchContent)
 
-
 find_package(Vulkan REQUIRED COMPONENTS glslang SPIRV-Tools)
-FetchContent_Declare(
-        spdloglib
-        GIT_REPOSITORY https://github.com/gabime/spdlog.git
-        GIT_TAG v1.15.0
-)
-FetchContent_MakeAvailable(spdloglib)
+
+if (NOT TARGET spdlog)
+    FetchContent_Declare(
+            spdlog_lib
+            GIT_REPOSITORY https://github.com/gabime/spdlog.git
+            GIT_TAG v1.15.0
+    )
+
+    FetchContent_MakeAvailable(spdlog_lib)
+endif ()
 
 FetchContent_Declare(
         volklib
