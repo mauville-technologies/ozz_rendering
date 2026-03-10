@@ -811,6 +811,12 @@ namespace OZZ::rendering::vk {
 
         vkResetFences(device, 1, &submissionContext.InFlightFence);
 
+        // clear deletion queue
+        for (const auto& deletionFunc : perFrameDeletions[currentFrame]) {
+            deletionFunc();
+        }
+        perFrameDeletions[currentFrame].clear();
+
         uint32_t imageIndex;
 
         if (const auto result = vkAcquireNextImageKHR(device,
@@ -1106,11 +1112,13 @@ namespace OZZ::rendering::vk {
     }
 
     void RHIDeviceVulkan::setViewportInternal(VkCommandBuffer cmd, const Viewport& viewport) {
+        // Flip Y to convert from Vulkan NDC (Y+ down) to OpenGL NDC (Y+ up),
+        // keeping GLM projection matrices correct without any shader changes.
         VkViewport vkViewport {
             .x = viewport.X,
-            .y = viewport.Y,
+            .y = viewport.Y + viewport.Height,
             .width = viewport.Width,
-            .height = viewport.Height,
+            .height = -viewport.Height,
             .minDepth = viewport.MinDepth,
             .maxDepth = viewport.MaxDepth,
         };
@@ -1125,8 +1133,8 @@ namespace OZZ::rendering::vk {
         VkRect2D vkScissor {
             .offset =
                 {
-                    .x = scissor.X,
-                    .y = scissor.Y,
+                    .x = static_cast<int32_t>(scissor.X),
+                    .y = static_cast<int32_t>(scissor.Y),
                 },
             .extent =
                 {
@@ -1183,10 +1191,10 @@ namespace OZZ::rendering::vk {
                 blendEquations[i] = {
                     .srcColorBlendFactor = ConvertBlendFactorToVulkan(src.SrcColorFactor),
                     .dstColorBlendFactor = ConvertBlendFactorToVulkan(src.DstColorFactor),
-                    .colorBlendOp        = ConvertBlendOpToVulkan(src.ColorBlendOp),
+                    .colorBlendOp = ConvertBlendOpToVulkan(src.ColorBlendOp),
                     .srcAlphaBlendFactor = ConvertBlendFactorToVulkan(src.SrcAlphaFactor),
                     .dstAlphaBlendFactor = ConvertBlendFactorToVulkan(src.DstAlphaFactor),
-                    .alphaBlendOp        = ConvertBlendOpToVulkan(src.AlphaBlendOp),
+                    .alphaBlendOp = ConvertBlendOpToVulkan(src.AlphaBlendOp),
                 };
             }
             vkCmdSetColorBlendEnableEXT(cmd, 0, graphicsStateDescriptor.ColorBlendAttachmentCount, blendEnables);
@@ -1240,13 +1248,14 @@ namespace OZZ::rendering::vk {
         }
     }
 
-    void RHIDeviceVulkan::BindBuffer(const RHIFrameContext& frameContext, RHIBufferHandle& bufferHandle) {
+    void RHIDeviceVulkan::BindBuffer(const RHIFrameContext& frameContext, const RHIBufferHandle& bufferHandle) {
         bindBufferInternal(*commandBufferResourcePool.Get(frameContext.GetCommandBuffer()),
                            bufferHandle,
                            GetFrameNumberFromFrameContext(frameContext));
     }
 
-    void RHIDeviceVulkan::bindBufferInternal(VkCommandBuffer cmd, RHIBufferHandle& bufferHandle, uint32_t frameIndex) {
+    void
+    RHIDeviceVulkan::bindBufferInternal(VkCommandBuffer cmd, const RHIBufferHandle& bufferHandle, uint32_t frameIndex) {
         const auto buffers = bufferResourcePool.Get(bufferHandle);
         if (!buffers) {
             spdlog::error("Failed to bind buffer. Buffer handle is invalid.");
@@ -1406,6 +1415,7 @@ namespace OZZ::rendering::vk {
         // Storage for descriptor infos (must outlive vkUpdateDescriptorSets)
         std::vector<VkDescriptorBufferInfo> bufferInfos;
         bufferInfos.reserve(writes.size());
+        VkDescriptorImageInfo imageInfo;
 
         for (const auto& write : writes) {
             VkWriteDescriptorSet vkWrite {
@@ -1431,7 +1441,7 @@ namespace OZZ::rendering::vk {
                 vkWrite.pBufferInfo = &bufferInfos.back();
             } else {
                 const auto texture = texturePool.Get(write.Image.Texture);
-                VkDescriptorImageInfo imageInfo {
+                imageInfo = {
                     .sampler = texture->Sampler,
                     .imageView = texture->ImageView,
                     .imageLayout = ConvertTextureLayoutToVulkan(TextureLayout::ShaderReadOnly),
@@ -1447,7 +1457,9 @@ namespace OZZ::rendering::vk {
     }
 
     void RHIDeviceVulkan::FreeDescriptorSet(RHIDescriptorSetHandle handle) {
-        descriptorSetResourcePool.Free(handle);
+        perFrameDeletions[currentFrame].emplace_back([this, handle]() {
+            descriptorSetResourcePool.Free(handle);
+        });
     }
 
     // ============================================================
@@ -1471,7 +1483,8 @@ namespace OZZ::rendering::vk {
             .arrayLayers = 1,
             .samples = VK_SAMPLE_COUNT_1_BIT,
             .tiling = VK_IMAGE_TILING_OPTIMAL,
-            .usage = ConvertTextureUsageToVulkan(descriptor.Usage),
+            .usage = ConvertTextureUsageToVulkan(descriptor.Usage |
+                                                 TextureUsage::TransferDst), // Ensure we can copy data to the texture
             .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
             .queueFamilyIndexCount = 0,
             .pQueueFamilyIndices = nullptr,
@@ -1648,7 +1661,9 @@ namespace OZZ::rendering::vk {
     }
 
     void RHIDeviceVulkan::FreeTexture(RHITextureHandle handle) {
-        texturePool.Free(handle);
+        perFrameDeletions[currentFrame].emplace_back([this, handle]() {
+            texturePool.Free(handle);
+        });
     }
 
     RHIShaderHandle RHIDeviceVulkan::CreateShader(ShaderFileParams&& shaderFiles) {
@@ -1844,7 +1859,9 @@ namespace OZZ::rendering::vk {
     }
 
     void RHIDeviceVulkan::FreeShader(const RHIShaderHandle& shaderHandle) {
-        shaderResourcePool.Free(shaderHandle);
+        perFrameDeletions[currentFrame].emplace_back([this, shaderHandle]() {
+            shaderResourcePool.Free(shaderHandle);
+        });
     }
 
     RHIBufferHandle RHIDeviceVulkan::CreateBuffer(BufferDescriptor&& bufferDescriptor) {
@@ -1921,6 +1938,13 @@ namespace OZZ::rendering::vk {
             std::memcpy(static_cast<uint8_t*>(mappedData) + offset, data, size);
             vmaFlushAllocation(vmaAllocator, buffer.Allocation, offset, size);
         }
+    }
+
+    void RHIDeviceVulkan::FreeBuffer(const RHIBufferHandle& bufferHandle) {
+
+        perFrameDeletions[currentFrame].emplace_back([this, bufferHandle]() {
+            bufferResourcePool.Free(bufferHandle);
+        });
     }
 
 } // namespace OZZ::rendering::vk

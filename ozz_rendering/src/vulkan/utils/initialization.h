@@ -39,14 +39,6 @@ namespace OZZ::rendering::vk {
     }
 
     inline VkSurfaceFormatKHR ChooseSurfaceFormatAndColorSpace(const std::vector<VkSurfaceFormatKHR>& surfaceFormats) {
-        for (const auto format : surfaceFormats) {
-            // TODO: @paulm -- make the preferred format and color space configurable, and don't default to
-            // B8G8R8A8_SRGB and SRGB_NONLINEAR... why was this set to preferred in the first place
-            if (format.format == VK_FORMAT_B8G8R8A8_SRGB && format.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
-                return format;
-            }
-        }
-
         return surfaceFormats[0];
     }
 

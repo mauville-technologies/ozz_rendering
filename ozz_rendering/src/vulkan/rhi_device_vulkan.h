@@ -48,7 +48,7 @@ namespace OZZ::rendering::vk {
 
         // Command Buffer Recording - Binding
         void BindShader(const RHIFrameContext&, const RHIShaderHandle&) override;
-        void BindBuffer(const RHIFrameContext& frameContext, RHIBufferHandle& bufferHandle) override;
+        void BindBuffer(const RHIFrameContext& frameContext, const RHIBufferHandle& bufferHandle) override;
         void SetPushConstants(const RHIFrameContext& frameContext,
                               RHIPipelineLayoutHandle pipelineLayoutHandle,
                               ShaderStageFlags stageFlags,
@@ -97,6 +97,7 @@ namespace OZZ::rendering::vk {
 
         RHIBufferHandle CreateBuffer(BufferDescriptor&& bufferDescriptor) override;
         void UpdateBuffer(const RHIBufferHandle&, const void* data, size_t size, size_t offset) override;
+        void FreeBuffer(const RHIBufferHandle& bufferHandle) override;
 
     private:
         // Initialization
@@ -124,7 +125,7 @@ namespace OZZ::rendering::vk {
         void setScissorInternal(VkCommandBuffer cmd, const Scissor& scissor);
         void setGraphicsStateInternal(VkCommandBuffer cmd, const GraphicsStateDescriptor& graphicsStateDescriptor);
         void bindShaderInternal(VkCommandBuffer cmd, const RHIShaderHandle& shaderHandle);
-        void bindBufferInternal(VkCommandBuffer cmd, RHIBufferHandle& bufferHandle, uint32_t frameIndex);
+        void bindBufferInternal(VkCommandBuffer cmd, const RHIBufferHandle& bufferHandle, uint32_t frameIndex);
         void setPushConstantsInternal(VkCommandBuffer cmd,
                                       RHIPipelineLayoutHandle pipelineLayoutHandle,
                                       ShaderStageFlags stageFlags,
@@ -154,6 +155,8 @@ namespace OZZ::rendering::vk {
 
         uint8_t framesInFlight {0};
         uint64_t currentFrame {0};
+
+        std::array<std::vector<std::function<void()>>, MaxFramesInFlight> perFrameDeletions {};
 
         /**
          * Vulkan Primitives

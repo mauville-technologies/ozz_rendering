@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <ozz_rendering/utils/enums.h>
 
 namespace OZZ::rendering {
 

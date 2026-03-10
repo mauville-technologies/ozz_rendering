@@ -37,7 +37,6 @@ namespace OZZ::rendering {
         std::string EngineName {"ozz_rendering_engine"};
         std::tuple<int, int, int, int> EngineVersion {1, 0, 0, 0};
 
-        void* WindowHandle {nullptr};
         std::vector<std::string> RequiredInstanceExtensions;
         std::function<std::pair<int, int>()> GetWindowFramebufferSizeFunction {};
         // CreateSurfaceFunction takes opaque pointers (instance, surface_out) to remain backend-agnostic.
@@ -123,7 +122,7 @@ namespace OZZ::rendering {
 
         // Command Buffer Recording - Binding
         virtual void BindShader(const RHIFrameContext& frameContext, const RHIShaderHandle& shaderHandle) = 0;
-        virtual void BindBuffer(const RHIFrameContext& frameContext, RHIBufferHandle& bufferHandle) = 0;
+        virtual void BindBuffer(const RHIFrameContext& frameContext, const RHIBufferHandle& bufferHandle) = 0;
         virtual void SetPushConstants(const RHIFrameContext& frameContext,
                                       RHIPipelineLayoutHandle pipelineLayoutHandle,
                                       ShaderStageFlags stageFlags,
@@ -172,6 +171,7 @@ namespace OZZ::rendering {
 
         virtual RHIBufferHandle CreateBuffer(BufferDescriptor&& bufferDescriptor) = 0;
         virtual void UpdateBuffer(const RHIBufferHandle&, const void* data, size_t size, size_t offset) = 0;
+        virtual void FreeBuffer(const RHIBufferHandle& handle) = 0;
 
     protected:
         // doing it this way will force the child classes to take in the platform context, which is necessary for

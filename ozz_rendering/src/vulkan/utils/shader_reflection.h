@@ -181,9 +181,10 @@ namespace OZZ::rendering::vk {
             }
 
             auto& [Bindings, BindingCount] = descriptor.Sets[setIndex];
-            const uint32_t bindingSlot = BindingCount;
+            const uint32_t bindingSlot = mergedBinding.Binding;
             if (bindingSlot >= MaxBoundDescriptorSets) {
-                spdlog::error("shader_reflection: too many bindings in set {} (max {})",
+                spdlog::error("shader_reflection: binding index {} in set {} exceeds MaxBoundDescriptorSets ({})",
+                              bindingSlot,
                               setIndex,
                               MaxBoundDescriptorSets);
                 continue;
@@ -195,7 +196,7 @@ namespace OZZ::rendering::vk {
                 .Count = mergedBinding.Count,
                 .StageFlags = mergedBinding.StageFlags,
             };
-            ++BindingCount;
+            BindingCount = std::max(BindingCount, bindingSlot + 1);
         }
 
         // Sort push constant ranges by offset for deterministic Vulkan submission order

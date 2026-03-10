@@ -197,7 +197,7 @@ int main() {
         .Width = static_cast<uint32_t>(texWidth),
         .Height = static_cast<uint32_t>(texHeight),
         .Format = OZZ::rendering::TextureFormat::RGBA8,
-        .Usage = OZZ::rendering::TextureUsage::Sampled | OZZ::rendering::TextureUsage::TransferDst,
+        .Usage = OZZ::rendering::TextureUsage::Sampled,
     });
 
     rhiDevice->UpdateTexture(texture, pixels, imageSize);

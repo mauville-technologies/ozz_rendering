@@ -194,15 +194,16 @@ namespace OZZ::rendering::vk {
         }
 
         shaderProgram->addShader(vertexShader.get());
-        shaderProgram->addShader(fragmentShader.get());
-
+        std::unique_ptr<glslang::TShader> geometryShader;
         if (const auto& GeometryShader = shaderSources.Geometry; !GeometryShader.empty()) {
-            auto [gSuccess, geometryShader] = compileShader(ShaderStageFlags::Geometry, GeometryShader);
+            auto [gSuccess, geom] = compileShader(ShaderStageFlags::Geometry, GeometryShader);
+            geometryShader = std::move(geom);
             if (!gSuccess) {
                 return std::nullopt;
             }
             shaderProgram->addShader(geometryShader.get());
         }
+        shaderProgram->addShader(fragmentShader.get());
 
         if (!shaderProgram->link(EShMessages::EShMsgDefault)) {
             spdlog::error("Failed to link shader program\n{} | {}",
