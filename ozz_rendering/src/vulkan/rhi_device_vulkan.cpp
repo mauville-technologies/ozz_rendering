@@ -776,7 +776,7 @@ namespace OZZ::rendering::vk {
             .flags = 0,
         };
 
-        VkFence submitFence;
+        VkFence submitFence {VK_NULL_HANDLE};
         if (const auto result = vkCreateFence(device, &fenceCreateInfo, nullptr, &submitFence); result != VK_SUCCESS) {
             spdlog::error("Failed to create fence for single time command submission. Error: {}",
                           static_cast<int>(result));
@@ -788,6 +788,8 @@ namespace OZZ::rendering::vk {
         if (const auto result = vkQueueSubmit(graphicsQueue, 1, &submitInfo, submitFence); result != VK_SUCCESS) {
             spdlog::error("Failed to submit command buffer for single time commands. Error: {}",
                           static_cast<int>(result));
+            vkDestroyFence(device, submitFence, nullptr);
+            cleanCommandBuffer(commandBuffer);
             return;
         }
 
@@ -1437,7 +1439,8 @@ namespace OZZ::rendering::vk {
         // Storage for descriptor infos (must outlive vkUpdateDescriptorSets)
         std::vector<VkDescriptorBufferInfo> bufferInfos;
         bufferInfos.reserve(writes.size());
-        VkDescriptorImageInfo imageInfo;
+        std::vector<VkDescriptorImageInfo> imageInfos;
+        imageInfos.reserve(writes.size());
 
         for (const auto& write : writes) {
             VkWriteDescriptorSet vkWrite {
@@ -1462,14 +1465,18 @@ namespace OZZ::rendering::vk {
                 });
                 vkWrite.pBufferInfo = &bufferInfos.back();
             } else {
-                const auto texture = texturePool.Get(write.Image.Texture);
-                imageInfo = {
+                const auto* texture = texturePool.Get(write.Image.Texture);
+                if (!texture) {
+                    spdlog::error("UpdateDescriptorSet: invalid texture handle at binding {}", write.Binding);
+                    continue;
+                }
+                imageInfos.push_back({
                     .sampler = texture->Sampler,
                     .imageView = texture->ImageView,
                     .imageLayout = ConvertTextureLayoutToVulkan(TextureLayout::ShaderReadOnly),
-                };
+                });
 
-                vkWrite.pImageInfo = &imageInfo;
+                vkWrite.pImageInfo = &imageInfos.back();
             }
 
             vkWrites.push_back(vkWrite);
@@ -1888,6 +1895,7 @@ namespace OZZ::rendering::vk {
 
     RHIBufferHandle RHIDeviceVulkan::CreateBuffer(BufferDescriptor&& bufferDescriptor) {
         std::array<RHIBufferVulkan, MaxFramesInFlight> buffers;
+        size_t createdBuffers = 0;
 
         for (auto& buffer : buffers) {
             VkBufferCreateInfo bufferCreateInfo {
@@ -1919,11 +1927,15 @@ namespace OZZ::rendering::vk {
                                                     &buffer.AllocationInfo);
                 result != VK_SUCCESS) {
                 spdlog::error("Failed to create buffer. Error: {}", static_cast<int>(result));
+                for (size_t i = 0; i < createdBuffers; ++i) {
+                    vmaDestroyBuffer(vmaAllocator, buffers[i].Buffer, buffers[i].Allocation);
+                }
                 return RHIBufferHandle::Null();
             }
 
             buffer.Access = bufferDescriptor.Access;
             buffer.Usage = bufferDescriptor.Usage;
+            createdBuffers++;
         }
 
         const auto handle = bufferResourcePool.Allocate(std::move(buffers));

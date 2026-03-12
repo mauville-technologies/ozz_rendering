@@ -201,6 +201,8 @@ int main() {
     });
 
     rhiDevice->UpdateTexture(texture, pixels, imageSize);
+    stbi_image_free(pixels);
+
     std::filesystem::path base = std::filesystem::current_path() / "assets" / "shaders" / "basic";
     shader = rhiDevice->CreateShader(OZZ::rendering::ShaderFileParams {
         .Vertex = base / "basic.vert",
