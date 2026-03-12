@@ -29,9 +29,16 @@ namespace OZZ::rendering {
     };
 
     struct DepthStencilState {
-        bool DepthTestEnable {false};
-        bool DepthWriteEnable {false};
-        bool StencilTestEnable {false};
+        bool DepthTestEnable {true};
+        bool DepthWriteEnable {true};
+        bool StencilTestEnable {true};
+        CompareOp DepthCompareOp {CompareOp::LessOrEqual};
+        CompareOp StencilCompareOp {CompareOp::LessOrEqual};
+        StencilOp StencilPassOp {StencilOp::Keep};
+        StencilOp StencilFailOp {StencilOp::Keep};
+        StencilOp StencilDepthFailOp {StencilOp::Keep};
+        StencilBit StencilWriteMask {StencilBit::All};
+        StencilFace StencilFaceMask {StencilFace::Front | StencilFace::Back};
     };
 
     struct MultisampleState {

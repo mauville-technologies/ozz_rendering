@@ -130,6 +130,45 @@ namespace OZZ::rendering {
         OneMinusConstantAlpha,
     };
 
+    enum class StencilFace : uint8_t {
+        Front = 1 << 0,
+        Back  = 1 << 1,
+    };
+
+    enum class StencilBit : uint8_t {
+        Bit0 = 1 << 0,
+        Bit1 = 1 << 1,
+        Bit2 = 1 << 2,
+        Bit3 = 1 << 3,
+        Bit4 = 1 << 4,
+        Bit5 = 1 << 5,
+        Bit6 = 1 << 6,
+        Bit7 = 1 << 7,
+        All  = 0xFF,
+    };
+
+    enum class StencilOp {
+        Keep,
+        Zero,
+        Replace,
+        IncrementClamp,
+        DecrementClamp,
+        Invert,
+        IncrementWrap,
+        DecrementWrap,
+    };
+
+    enum class CompareOp {
+        Never,
+        Less,
+        Equal,
+        LessOrEqual,
+        Greater,
+        NotEqual,
+        GreaterOrEqual,
+        Always,
+    };
+
     enum class BlendOp {
         Add,
         Subtract,
@@ -190,3 +229,9 @@ struct enable_bitmask_operators<OZZ::rendering::TextureAspect> : std::true_type 
 
 template <>
 struct enable_bitmask_operators<OZZ::rendering::ColorComponent> : std::true_type {};
+
+template <>
+struct enable_bitmask_operators<OZZ::rendering::StencilFace> : std::true_type {};
+
+template <>
+struct enable_bitmask_operators<OZZ::rendering::StencilBit> : std::true_type {};

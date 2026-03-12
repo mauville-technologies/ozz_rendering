@@ -1170,7 +1170,29 @@ namespace OZZ::rendering::vk {
         vkCmdSetDepthTestEnable(cmd, graphicsStateDescriptor.DepthStencil.DepthTestEnable);
         vkCmdSetDepthWriteEnable(cmd, graphicsStateDescriptor.DepthStencil.DepthWriteEnable);
         vkCmdSetStencilTestEnable(cmd, graphicsStateDescriptor.DepthStencil.StencilTestEnable);
+        if (graphicsStateDescriptor.DepthStencil.DepthTestEnable) {
+            vkCmdSetDepthCompareOp(cmd, ConvertCompareOpToVulkan(graphicsStateDescriptor.DepthStencil.DepthCompareOp));
+        }
+        if (graphicsStateDescriptor.DepthStencil.StencilTestEnable) {
+            vkCmdSetStencilOp(cmd,
+                              ConvertStencilFaceToVulkan(graphicsStateDescriptor.DepthStencil.StencilFaceMask),
+                              ConvertStencilOpToVulkan(graphicsStateDescriptor.DepthStencil.StencilFailOp),
+                              ConvertStencilOpToVulkan(graphicsStateDescriptor.DepthStencil.StencilPassOp),
+                              ConvertStencilOpToVulkan(graphicsStateDescriptor.DepthStencil.StencilDepthFailOp),
+                              ConvertCompareOpToVulkan(graphicsStateDescriptor.DepthStencil.StencilCompareOp));
+            vkCmdSetStencilCompareMask(
+                cmd,
+                ConvertStencilFaceToVulkan(graphicsStateDescriptor.DepthStencil.StencilFaceMask),
 
+                ConvertStencilBitToVulkan(graphicsStateDescriptor.DepthStencil.StencilWriteMask));
+
+            vkCmdSetStencilReference(cmd,
+                                     ConvertStencilFaceToVulkan(graphicsStateDescriptor.DepthStencil.StencilFaceMask),
+                                     0);
+            vkCmdSetStencilWriteMask(cmd,
+                                     ConvertStencilFaceToVulkan(graphicsStateDescriptor.DepthStencil.StencilFaceMask),
+                                     ConvertStencilBitToVulkan(graphicsStateDescriptor.DepthStencil.StencilWriteMask));
+        }
         // Multisample
         const VkSampleCountFlagBits sampleCount =
             ConvertSampleCountToVulkan(graphicsStateDescriptor.Multisample.Samples);

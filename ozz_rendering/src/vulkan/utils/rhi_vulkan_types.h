@@ -252,6 +252,47 @@ namespace OZZ::rendering::vk {
         return VK_BLEND_OP_ADD;
     }
 
+    inline VkStencilOp ConvertStencilOpToVulkan(const StencilOp op) {
+        switch (op) {
+            case StencilOp::Keep:           return VK_STENCIL_OP_KEEP;
+            case StencilOp::Zero:           return VK_STENCIL_OP_ZERO;
+            case StencilOp::Replace:        return VK_STENCIL_OP_REPLACE;
+            case StencilOp::IncrementClamp: return VK_STENCIL_OP_INCREMENT_AND_CLAMP;
+            case StencilOp::DecrementClamp: return VK_STENCIL_OP_DECREMENT_AND_CLAMP;
+            case StencilOp::Invert:         return VK_STENCIL_OP_INVERT;
+            case StencilOp::IncrementWrap:  return VK_STENCIL_OP_INCREMENT_AND_WRAP;
+            case StencilOp::DecrementWrap:  return VK_STENCIL_OP_DECREMENT_AND_WRAP;
+        }
+        return VK_STENCIL_OP_KEEP;
+    }
+
+    inline VkStencilFaceFlags ConvertStencilFaceToVulkan(const StencilFace face) {
+        VkStencilFaceFlags flags = 0;
+        if (has(face, StencilFace::Front))
+            flags |= VK_STENCIL_FACE_FRONT_BIT;
+        if (has(face, StencilFace::Back))
+            flags |= VK_STENCIL_FACE_BACK_BIT;
+        return flags;
+    }
+
+    inline uint32_t ConvertStencilBitToVulkan(const StencilBit mask) {
+        return static_cast<uint32_t>(to_index(mask));
+    }
+
+    inline VkCompareOp ConvertCompareOpToVulkan(const CompareOp op) {
+        switch (op) {
+            case CompareOp::Never:          return VK_COMPARE_OP_NEVER;
+            case CompareOp::Less:           return VK_COMPARE_OP_LESS;
+            case CompareOp::Equal:          return VK_COMPARE_OP_EQUAL;
+            case CompareOp::LessOrEqual:    return VK_COMPARE_OP_LESS_OR_EQUAL;
+            case CompareOp::Greater:        return VK_COMPARE_OP_GREATER;
+            case CompareOp::NotEqual:       return VK_COMPARE_OP_NOT_EQUAL;
+            case CompareOp::GreaterOrEqual: return VK_COMPARE_OP_GREATER_OR_EQUAL;
+            case CompareOp::Always:         return VK_COMPARE_OP_ALWAYS;
+        }
+        return VK_COMPARE_OP_LESS;
+    }
+
     inline VkVertexInputRate ConvertVertexInputRateToVulkan(const VertexInputRate inputRate) {
         switch (inputRate) {
             case VertexInputRate::Vertex:
