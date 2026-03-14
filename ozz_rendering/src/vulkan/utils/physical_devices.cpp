@@ -194,3 +194,17 @@ const PhysicalDevice& RHIVulkanPhysicalDevices::SelectedDevice() const {
     }
     return devices[selectedDevice];
 }
+
+bool RHIVulkanPhysicalDevices::RefreshSurfaceCapabilities(const VkSurfaceKHR& surface) {
+    if (selectedDevice < 0) {
+        spdlog::error("RefreshSurfaceCapabilities: no device selected");
+        return false;
+    }
+    if (vkGetPhysicalDeviceSurfaceCapabilitiesKHR(devices[selectedDevice].Device,
+                                                   surface,
+                                                   &devices[selectedDevice].SurfaceCapabilities) != VK_SUCCESS) {
+        spdlog::error("Failed to refresh surface capabilities");
+        return false;
+    }
+    return true;
+}

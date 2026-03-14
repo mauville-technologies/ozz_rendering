@@ -102,6 +102,7 @@ namespace OZZ::rendering {
         // Frame
         virtual RHIFrameContext BeginFrame() = 0;
         virtual void SubmitAndPresentFrame(RHIFrameContext&& frameContext) = 0;
+        virtual std::pair<uint32_t, uint32_t> GetSwapchainExtent() const = 0;
 
         // Command Buffer Recording - Render Pass
         virtual void BeginRenderPass(const RHIFrameContext& frameContext,

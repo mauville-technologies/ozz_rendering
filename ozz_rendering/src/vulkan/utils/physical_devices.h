@@ -26,6 +26,7 @@ public:
     bool Init(const VkInstance& instance, const VkSurfaceKHR& surface);
     bool SelectDevice(VkQueueFlags requiredQueueType, bool bSupportsPresent);
     [[nodiscard]] const PhysicalDevice& SelectedDevice() const;
+    bool RefreshSurfaceCapabilities(const VkSurfaceKHR& surface);
 
     [[nodiscard]] uint32_t SelectedQueueFamily() const { return selectedQueueFamily; }
 

@@ -32,6 +32,7 @@ namespace OZZ::rendering::vk {
         // Frame
         RHIFrameContext BeginFrame() override;
         void SubmitAndPresentFrame(RHIFrameContext&& frameContext) override;
+        std::pair<uint32_t, uint32_t> GetSwapchainExtent() const override;
 
         // Command Buffer Recording - Render Pass
         void BeginRenderPass(const RHIFrameContext& frameContext, const RenderPassDescriptor&) override;
@@ -106,11 +107,15 @@ namespace OZZ::rendering::vk {
         bool createDebugCallback();
         bool createSurface();
         bool createDevice();
-        bool createSwapchain();
+        bool createSwapchain(VkSwapchainKHR oldSwapchain = VK_NULL_HANDLE);
         bool createCommandBufferPool();
         bool createSubmissionContexts();
         bool initializeQueue();
         bool createDescriptorPool();
+
+        // Swapchain recreation
+        void destroySwapchainResources();
+        bool recreateSwapchain();
 
         // Immediate more command buffers
         VkCommandBuffer beginSingleTimeCommands();
@@ -178,6 +183,7 @@ namespace OZZ::rendering::vk {
         /**
          * Swapchain Vulkan objects
          */
+        VkExtent2D swapchainExtent {};
         VkSurfaceFormatKHR swapchainSurfaceFormat {};
         std::vector<VkImage> swapchainImages;
         std::vector<VkImageView> swapchainImageViews;

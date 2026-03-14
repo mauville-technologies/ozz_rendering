@@ -132,7 +132,7 @@ int main() {
     }
 
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-    glfwWindowHint(GLFW_RESIZABLE, GL_FALSE);
+    glfwWindowHint(GLFW_RESIZABLE, GL_TRUE);
 
     window = glfwCreateWindow(WINDOW_WIDTH, WINDOW_HEIGHT, "Tutorial 1", nullptr, nullptr);
 
@@ -165,7 +165,6 @@ int main() {
             .AppVersion = {0, 1, 0, 0},
             .EngineName = "RHI Playground Engine",
             .EngineVersion = {0, 1, 0, 0},
-            .WindowHandle = window,
             .RequiredInstanceExtensions = requiredExtensions,
             .GetWindowFramebufferSizeFunction =
                 [window]() {
@@ -322,8 +321,13 @@ int main() {
         count++;
         glfwPollEvents();
         auto context = rhiDevice->BeginFrame();
+        if (!context.IsValid()) {
+            continue;
+        }
+        const auto [swapW, swapH] = rhiDevice->GetSwapchainExtent();
         renderPassDescriptor.ColorAttachments[0].Texture = context.GetBackbufferImage();
         renderPassDescriptor.DepthAttachment.Texture = context.GetBackbufferDepthImage();
+        renderPassDescriptor.RenderArea = {.X = 0, .Y = 0, .Width = swapW, .Height = swapH};
         // renderPassDescriptor.StencilAttachment.Texture = context.GetBackbufferDepthImage();
         rhiDevice->BeginRenderPass(context, renderPassDescriptor);
         rhiDevice->SetGraphicsState(
@@ -350,8 +354,8 @@ int main() {
                                {
                                    .X = 0,
                                    .Y = 0,
-                                   .Width = WINDOW_WIDTH,
-                                   .Height = WINDOW_HEIGHT,
+                                   .Width = static_cast<float>(swapW),
+                                   .Height = static_cast<float>(swapH),
                                    .MinDepth = 0.f,
                                    .MaxDepth = 1.f,
                                });
@@ -359,8 +363,8 @@ int main() {
                               {
                                   .X = 0,
                                   .Y = 0,
-                                  .Width = WINDOW_WIDTH,
-                                  .Height = WINDOW_HEIGHT,
+                                  .Width = swapW,
+                                  .Height = swapH,
                               });
         rhiDevice->BindShader(context, shader);
         rhiDevice->BindDescriptorSet(context, pipelineLayoutHandle, 0, uboDescriptorSet);

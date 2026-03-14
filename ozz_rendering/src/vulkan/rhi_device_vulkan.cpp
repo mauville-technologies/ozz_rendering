@@ -477,7 +477,7 @@ namespace OZZ::rendering::vk {
         return true;
     }
 
-    bool RHIDeviceVulkan::createSwapchain() {
+    bool RHIDeviceVulkan::createSwapchain(VkSwapchainKHR oldSwapchain) {
         const VkSurfaceCapabilitiesKHR& surfaceCapabilities = physicalDevices.SelectedDevice().SurfaceCapabilities;
         const uint32_t numImages = ChooseNumberOfSwapchainImages(surfaceCapabilities);
 
@@ -487,6 +487,7 @@ namespace OZZ::rendering::vk {
         VkPresentModeKHR presentMode = ChoosePresentMode(presentModes, VK_PRESENT_MODE_IMMEDIATE_KHR);
 
         swapchainSurfaceFormat = ChooseSurfaceFormatAndColorSpace(physicalDevices.SelectedDevice().SurfaceFormats);
+        swapchainExtent = surfaceCapabilities.currentExtent;
 
         auto queueFamily = physicalDevices.SelectedQueueFamily();
         VkSwapchainCreateInfoKHR swapchainCreateInfo {
@@ -496,7 +497,7 @@ namespace OZZ::rendering::vk {
             .minImageCount = numImages,
             .imageFormat = swapchainSurfaceFormat.format,
             .imageColorSpace = swapchainSurfaceFormat.colorSpace,
-            .imageExtent = surfaceCapabilities.currentExtent,
+            .imageExtent = swapchainExtent,
             .imageArrayLayers = 1,
             .imageUsage = (VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT),
             .imageSharingMode = VK_SHARING_MODE_EXCLUSIVE,
@@ -506,6 +507,7 @@ namespace OZZ::rendering::vk {
             .compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
             .presentMode = presentMode,
             .clipped = VK_TRUE,
+            .oldSwapchain = oldSwapchain,
         };
 
         if (const auto result = vkCreateSwapchainKHR(device, &swapchainCreateInfo, nullptr, &swapchain);
@@ -588,8 +590,8 @@ namespace OZZ::rendering::vk {
 
             // Create the depth images
             swapchainDepthTextureHandles.emplace_back(CreateTexture({
-                .Width = surfaceCapabilities.currentExtent.width,
-                .Height = surfaceCapabilities.currentExtent.height,
+                .Width = swapchainExtent.width,
+                .Height = swapchainExtent.height,
                 .Format = TextureFormat::D24S8,
                 .Usage = TextureUsage::DepthAttachment,
             }));
@@ -719,6 +721,75 @@ namespace OZZ::rendering::vk {
         return true;
     }
 
+    void RHIDeviceVulkan::destroySwapchainResources() {
+        for (const auto handle : swapchainDepthTextureHandles) {
+            FreeTexture(handle);
+        }
+        swapchainDepthTextureHandles.clear();
+
+        for (const auto handle : swapchainTextureHandles) {
+            texturePool.Free(handle);
+        }
+        swapchainTextureHandles.clear();
+
+        for (auto semaphore : presentCompleteSemaphores) {
+            if (semaphore != VK_NULL_HANDLE) {
+                vkDestroySemaphore(device, semaphore, nullptr);
+            }
+        }
+        presentCompleteSemaphores.clear();
+
+        for (auto imageView : swapchainImageViews) {
+            if (imageView != VK_NULL_HANDLE) {
+                vkDestroyImageView(device, imageView, nullptr);
+            }
+        }
+        swapchainImageViews.clear();
+        swapchainImages.clear();
+    }
+
+    bool RHIDeviceVulkan::recreateSwapchain() {
+        // Don't recreate while the window is minimized (framebuffer is 0x0).
+        if (platformContext.GetWindowFramebufferSizeFunction) {
+            auto [w, h] = platformContext.GetWindowFramebufferSizeFunction();
+            if (w == 0 || h == 0) {
+                return true;
+            }
+        }
+
+        // Wait for all in-flight work to complete before touching any resources.
+        vkDeviceWaitIdle(device);
+
+        if (!physicalDevices.RefreshSurfaceCapabilities(surface)) {
+            spdlog::error("Failed to refresh surface capabilities during swapchain recreation");
+            return false;
+        }
+
+        destroySwapchainResources();
+
+        VkSwapchainKHR oldSwapchain = swapchain;
+        swapchain = VK_NULL_HANDLE;
+
+        if (!createSwapchain(oldSwapchain)) {
+            spdlog::error("Failed to recreate swapchain");
+            if (oldSwapchain != VK_NULL_HANDLE) {
+                vkDestroySwapchainKHR(device, oldSwapchain, nullptr);
+            }
+            return false;
+        }
+
+        if (oldSwapchain != VK_NULL_HANDLE) {
+            vkDestroySwapchainKHR(device, oldSwapchain, nullptr);
+        }
+
+        spdlog::info("Swapchain recreated ({}x{})", swapchainExtent.width, swapchainExtent.height);
+        return true;
+    }
+
+    std::pair<uint32_t, uint32_t> RHIDeviceVulkan::GetSwapchainExtent() const {
+        return {swapchainExtent.width, swapchainExtent.height};
+    }
+
     VkCommandBuffer RHIDeviceVulkan::beginSingleTimeCommands() {
         VkCommandBufferAllocateInfo allocateInfo {
             .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
@@ -811,26 +882,43 @@ namespace OZZ::rendering::vk {
             return RHIFrameContext::Null();
         }
 
-        vkResetFences(device, 1, &submissionContext.InFlightFence);
-
-        // clear deletion queue
+        // Clear per-frame deletion queue now that the GPU has finished with this slot.
         for (const auto& deletionFunc : perFrameDeletions[currentFrame]) {
             deletionFunc();
         }
         perFrameDeletions[currentFrame].clear();
 
         uint32_t imageIndex;
+        VkResult acquireResult = vkAcquireNextImageKHR(device,
+                                                       swapchain,
+                                                       UINT64_MAX,
+                                                       submissionContext.AcquireImageSemaphore,
+                                                       VK_NULL_HANDLE,
+                                                       &imageIndex);
 
-        if (const auto result = vkAcquireNextImageKHR(device,
-                                                      swapchain,
-                                                      UINT64_MAX,
-                                                      submissionContext.AcquireImageSemaphore,
-                                                      VK_NULL_HANDLE,
-                                                      &imageIndex);
-            result != VK_SUCCESS) {
-            spdlog::error("Failed to acquire next image in BeginFrame. Error: {}", static_cast<int>(result));
+        if (acquireResult == VK_ERROR_OUT_OF_DATE_KHR) {
+            // Fence is still signaled (we haven't reset it yet), so the next BeginFrame
+            // will not deadlock waiting on it.
+            if (!recreateSwapchain()) {
+                return RHIFrameContext::Null();
+            }
+            // Retry acquire on the new swapchain.
+            acquireResult = vkAcquireNextImageKHR(device,
+                                                  swapchain,
+                                                  UINT64_MAX,
+                                                  submissionContext.AcquireImageSemaphore,
+                                                  VK_NULL_HANDLE,
+                                                  &imageIndex);
+        }
+
+        if (acquireResult != VK_SUCCESS && acquireResult != VK_SUBOPTIMAL_KHR) {
+            spdlog::error("Failed to acquire next image in BeginFrame. Error: {}", static_cast<int>(acquireResult));
+            // Fence is still signaled — no deadlock on the next frame.
             return RHIFrameContext::Null();
         }
+
+        // Commit to this frame: reset the fence only now that we will submit work.
+        vkResetFences(device, 1, &submissionContext.InFlightFence);
 
         const auto commandBuffer = commandBufferResourcePool.Get(submissionContext.CommandBuffer);
 
@@ -921,7 +1009,10 @@ namespace OZZ::rendering::vk {
             .pResults = VK_NULL_HANDLE,
         };
 
-        if (const auto result = vkQueuePresentKHR(graphicsQueue, &presentInfo); result != VK_SUCCESS) {
+        if (const auto result = vkQueuePresentKHR(graphicsQueue, &presentInfo);
+            result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
+            recreateSwapchain();
+        } else if (result != VK_SUCCESS) {
             spdlog::error("Failed to present frame in SubmitFrame. Error: {}", static_cast<int>(result));
         }
 
