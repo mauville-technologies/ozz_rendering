@@ -18,18 +18,20 @@ namespace OZZ::rendering::vk {
                                                         const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData,
                                                         void* pUserData) {
 
+        const char* msg = pCallbackData && pCallbackData->pMessage ? pCallbackData->pMessage : "<null Vulkan message>";
+
         switch (severity) {
             case VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT:
-                spdlog::error(pCallbackData->pMessage);
+                spdlog::error("{}", msg);
                 break;
             case VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT:
-                spdlog::trace(pCallbackData->pMessage);
+                spdlog::trace("{}", msg);
                 break;
             case VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT:
-                spdlog::warn(pCallbackData->pMessage);
+                spdlog::warn("{}", msg);
                 break;
             case VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT:
-                spdlog::trace(pCallbackData->pMessage);
+                spdlog::info("{}", msg);
                 break;
             default:
                 break;

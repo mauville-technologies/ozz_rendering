@@ -166,7 +166,7 @@ namespace OZZ::rendering::vk {
 
         // --- Populate descriptor sets ---
         // Group merged bindings by set index
-        for (const auto& mergedBinding : mergedBindings | std::views::values) {
+        for (const auto& [key, mergedBinding] : mergedBindings) {
             uint32_t setIndex = mergedBinding.Set;
             if (setIndex >= MaxDescriptorSets) {
                 spdlog::error("shader_reflection: descriptor set index {} exceeds MaxDescriptorSets ({})",
