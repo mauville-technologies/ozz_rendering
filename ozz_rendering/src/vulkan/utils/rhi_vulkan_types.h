@@ -413,6 +413,8 @@ namespace OZZ::rendering::vk {
         switch (format) {
             case TextureFormat::RGBA8:
                 return VK_FORMAT_R8G8B8A8_UNORM;
+            case TextureFormat::RGBA8_SRGB:
+                return VK_FORMAT_R8G8B8A8_SRGB;
             case TextureFormat::RGB8:
                 return VK_FORMAT_R8G8B8_UNORM;
             case TextureFormat::R8:

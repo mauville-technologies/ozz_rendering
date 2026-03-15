@@ -11,6 +11,7 @@ namespace OZZ::rendering {
 
     enum class TextureFormat {
         RGBA8,
+        RGBA8_SRGB, // sRGB variant: GPU decodes sRGB->linear on sample, encodes linear->sRGB on write
         RGB8,
         R8,
         BGRA8, // color

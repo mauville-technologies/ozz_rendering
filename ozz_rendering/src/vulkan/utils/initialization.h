@@ -39,6 +39,27 @@ namespace OZZ::rendering::vk {
     }
 
     inline VkSurfaceFormatKHR ChooseSurfaceFormatAndColorSpace(const std::vector<VkSurfaceFormatKHR>& surfaceFormats) {
+        // Prefer sRGB formats so the GPU automatically converts linear -> sRGB on output,
+        // avoiding washed-out colors on sRGB displays (e.g. Steam Deck).
+        constexpr VkFormat preferredSrgbFormats[] = {
+            VK_FORMAT_B8G8R8A8_SRGB,
+            VK_FORMAT_R8G8B8A8_SRGB,
+        };
+
+        for (const auto& candidate : surfaceFormats) {
+            if (candidate.colorSpace != VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
+                continue;
+            }
+            for (const auto preferredFormat : preferredSrgbFormats) {
+                if (candidate.format == preferredFormat) {
+                    spdlog::debug("Selected sRGB surface format {:X}", static_cast<uint32_t>(candidate.format));
+                    return candidate;
+                }
+            }
+        }
+
+        spdlog::warn("No sRGB surface format found, falling back to first available format {:X}",
+                     static_cast<uint32_t>(surfaceFormats[0].format));
         return surfaceFormats[0];
     }
 
