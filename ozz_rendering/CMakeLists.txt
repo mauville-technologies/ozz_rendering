@@ -32,3 +32,9 @@ target_include_directories(${PROJECT_NAME}
         PRIVATE
         src/
 )
+
+# Conditionally link Tracy when available (e.g. built as part of lights engine)
+if (TARGET TracyClient)
+    target_link_libraries(${PROJECT_NAME} PUBLIC TracyClient)
+    target_compile_definitions(${PROJECT_NAME} PUBLIC OZZ_PROFILING_ENABLED)
+endif ()

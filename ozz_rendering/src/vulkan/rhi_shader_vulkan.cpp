@@ -13,8 +13,11 @@
 
 #include <vulkan/utils/shader_reflection.h>
 
+#include <ozz_rendering/profiling.h>
+
 namespace OZZ::rendering::vk {
     RHIShaderVulkan::RHIShaderVulkan(VkDevice device, ShaderFileParams&& shaderFiles) {
+        OZZ_PROFILE_FUNCTION;
         // load files
         std::ifstream vertexFile(shaderFiles.Vertex);
         std::ifstream fragmentFile(shaderFiles.Fragment);
@@ -45,6 +48,7 @@ namespace OZZ::rendering::vk {
     }
 
     RHIShaderVulkan::RHIShaderVulkan(VkDevice device, ShaderSourceParams&& shaderSources) {
+        OZZ_PROFILE_FUNCTION;
         bIsValid = compileSources(device, std::move(shaderSources));
     }
 
@@ -67,6 +71,7 @@ namespace OZZ::rendering::vk {
     }
 
     bool RHIShaderVulkan::compileSources(VkDevice device, ShaderSourceParams&& shaderSources) {
+        OZZ_PROFILE_FUNCTION;
         auto compiledOpt = compileProgram(shaderSources);
         if (!compiledOpt.has_value()) {
             spdlog::error("Failed to compile shader program. Aborting process. See logs for details.");
@@ -85,6 +90,7 @@ namespace OZZ::rendering::vk {
     bool RHIShaderVulkan::CreateVkShaders(VkDevice device,
                                           const std::vector<VkDescriptorSetLayout>& setLayouts,
                                           const std::vector<VkPushConstantRange>& pushConstantRanges) {
+        OZZ_PROFILE_FUNCTION;
         shaderStages.clear();
         shaders.clear();
 
@@ -171,6 +177,7 @@ namespace OZZ::rendering::vk {
     }
 
     std::optional<CompiledShaderProgram> RHIShaderVulkan::compileProgram(const ShaderSourceParams& shaderSources) {
+        OZZ_PROFILE_FUNCTION;
         glslang::InitializeProcess();
 
         // vertex and fragment are mandatory
@@ -228,6 +235,7 @@ namespace OZZ::rendering::vk {
 
     std::pair<bool, std::unique_ptr<glslang::TShader>> RHIShaderVulkan::compileShader(const ShaderStageFlags stage,
                                                                                       const std::string& glslCode) {
+        OZZ_PROFILE_FUNCTION;
         auto shader = std::make_unique<glslang::TShader>(ToGLSLANGShaderStage(stage));
         const char* code = glslCode.c_str();
         shader->setStrings(&code, 1);

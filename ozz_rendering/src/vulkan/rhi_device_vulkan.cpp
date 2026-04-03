@@ -12,6 +12,8 @@
 #include <ranges>
 #include <spdlog/spdlog.h>
 
+#include <ozz_rendering/profiling.h>
+
 namespace OZZ::rendering::vk {
     static VKAPI_ATTR VkBool32 VKAPI_CALL DebugCallback(VkDebugUtilsMessageSeverityFlagBitsEXT severity,
                                                         VkDebugUtilsMessageTypeFlagsEXT type,
@@ -218,6 +220,7 @@ namespace OZZ::rendering::vk {
     // ============================================================
 
     bool RHIDeviceVulkan::initialize() {
+        OZZ_PROFILE_FUNCTION;
         spdlog::info("Initializing Vulkan RHI device");
         constexpr auto failureMessage = [] {
             spdlog::error("Failed to initialize Vulkan RHI device");
@@ -324,6 +327,7 @@ namespace OZZ::rendering::vk {
     }
 
     bool RHIDeviceVulkan::createInstance() {
+        OZZ_PROFILE_FUNCTION;
         std::vector<const char*> layers {
             // Going to use configurator for validation layers -- uncomment if it's not working
             // "VK_LAYER_KHRONOS_validation"
@@ -404,6 +408,7 @@ namespace OZZ::rendering::vk {
     }
 
     bool RHIDeviceVulkan::createDevice() {
+        OZZ_PROFILE_FUNCTION;
         float queuePriorities[] = {1.f};
 
         VkDeviceQueueCreateInfo queueCreateInfo {
@@ -480,6 +485,7 @@ namespace OZZ::rendering::vk {
     }
 
     bool RHIDeviceVulkan::createSwapchain(VkSwapchainKHR oldSwapchain) {
+        OZZ_PROFILE_FUNCTION;
         const VkSurfaceCapabilitiesKHR& surfaceCapabilities = physicalDevices.SelectedDevice().SurfaceCapabilities;
         const uint32_t numImages = ChooseNumberOfSwapchainImages(surfaceCapabilities);
 
@@ -751,6 +757,7 @@ namespace OZZ::rendering::vk {
     }
 
     bool RHIDeviceVulkan::recreateSwapchain() {
+        OZZ_PROFILE_FUNCTION;
         // Don't recreate while the window is minimized (framebuffer is 0x0).
         if (platformContext.GetWindowFramebufferSizeFunction) {
             auto [w, h] = platformContext.GetWindowFramebufferSizeFunction();
@@ -877,6 +884,7 @@ namespace OZZ::rendering::vk {
     // ============================================================
 
     RHIFrameContext RHIDeviceVulkan::BeginFrame() {
+        OZZ_PROFILE_FUNCTION;
         const auto& submissionContext = submissionContexts[currentFrame];
         if (const auto fenceResult = vkWaitForFences(device, 1, &submissionContext.InFlightFence, VK_TRUE, UINT64_MAX);
             fenceResult != VK_SUCCESS) {
@@ -956,6 +964,7 @@ namespace OZZ::rendering::vk {
     }
 
     void RHIDeviceVulkan::SubmitAndPresentFrame(RHIFrameContext&& frameContext) {
+        OZZ_PROFILE_FUNCTION;
         // Prepare swapchain image for presentation
         const auto imageIndex = GetImageIndexFromFrameContext(frameContext);
 
@@ -1027,6 +1036,7 @@ namespace OZZ::rendering::vk {
 
     void RHIDeviceVulkan::BeginRenderPass(const RHIFrameContext& frameContext,
                                           const RenderPassDescriptor& renderPassDescriptor) {
+        OZZ_PROFILE_FUNCTION;
         beginRenderPassInternal(*commandBufferResourcePool.Get(frameContext.GetCommandBuffer()), renderPassDescriptor);
     }
 
@@ -1129,6 +1139,7 @@ namespace OZZ::rendering::vk {
     }
 
     void RHIDeviceVulkan::EndRenderPass(const RHIFrameContext& frameContext) {
+        OZZ_PROFILE_FUNCTION;
         endRenderPassInternal(*commandBufferResourcePool.Get(frameContext.GetCommandBuffer()));
     }
 
@@ -1242,6 +1253,7 @@ namespace OZZ::rendering::vk {
 
     void RHIDeviceVulkan::SetGraphicsState(const RHIFrameContext& frameContext,
                                            const GraphicsStateDescriptor& graphicsStateDescriptor) {
+        OZZ_PROFILE_FUNCTION;
         setGraphicsStateInternal(*commandBufferResourcePool.Get(frameContext.GetCommandBuffer()),
                                  graphicsStateDescriptor);
     }
@@ -1356,6 +1368,7 @@ namespace OZZ::rendering::vk {
     // ============================================================
 
     void RHIDeviceVulkan::BindShader(const RHIFrameContext& frameContext, const RHIShaderHandle& shaderHandle) {
+        OZZ_PROFILE_FUNCTION;
         bindShaderInternal(*commandBufferResourcePool.Get(frameContext.GetCommandBuffer()), shaderHandle);
     }
 
@@ -1366,6 +1379,7 @@ namespace OZZ::rendering::vk {
     }
 
     void RHIDeviceVulkan::BindBuffer(const RHIFrameContext& frameContext, const RHIBufferHandle& bufferHandle) {
+        OZZ_PROFILE_FUNCTION;
         bindBufferInternal(*commandBufferResourcePool.Get(frameContext.GetCommandBuffer()),
                            bufferHandle,
                            GetFrameNumberFromFrameContext(frameContext));
@@ -1425,6 +1439,7 @@ namespace OZZ::rendering::vk {
                                             RHIPipelineLayoutHandle pipelineLayoutHandle,
                                             uint32_t setIndex,
                                             RHIDescriptorSetHandle descriptorSetHandle) {
+        OZZ_PROFILE_FUNCTION;
         bindDescriptorSetInternal(*commandBufferResourcePool.Get(frameContext.GetCommandBuffer()),
                                   pipelineLayoutHandle,
                                   setIndex,
@@ -1453,6 +1468,7 @@ namespace OZZ::rendering::vk {
                                const uint32_t instanceCount,
                                const uint32_t firstVertex,
                                const uint32_t firstInstance) {
+        OZZ_PROFILE_FUNCTION;
         drawInternal(*commandBufferResourcePool.Get(frameContext.GetCommandBuffer()),
                      vertexCount,
                      instanceCount,
@@ -1474,6 +1490,7 @@ namespace OZZ::rendering::vk {
                                       uint32_t firstIndex,
                                       int32_t vertexOffset,
                                       uint32_t firstInstance) {
+        OZZ_PROFILE_FUNCTION;
         drawIndexedInternal(*commandBufferResourcePool.Get(frameContext.GetCommandBuffer()),
                             indexCount,
                             instanceCount,
@@ -1496,6 +1513,7 @@ namespace OZZ::rendering::vk {
     // ============================================================
 
     RHIDescriptorSetHandle RHIDeviceVulkan::CreateDescriptorSet(RHIDescriptorSetLayoutHandle layoutHandle) {
+        OZZ_PROFILE_FUNCTION;
         const auto* layout = descriptorSetLayoutResourcePool.Get(layoutHandle);
         if (!layout) {
             spdlog::error("CreateDescriptorSet: invalid descriptor set layout handle");
@@ -1520,6 +1538,7 @@ namespace OZZ::rendering::vk {
 
     void RHIDeviceVulkan::UpdateDescriptorSet(RHIDescriptorSetHandle handle,
                                               std::span<const RHIDescriptorWrite> writes) {
+        OZZ_PROFILE_FUNCTION;
         const auto* set = descriptorSetResourcePool.Get(handle);
         if (!set) {
             spdlog::error("UpdateDescriptorSet: invalid descriptor set handle");
@@ -1589,6 +1608,7 @@ namespace OZZ::rendering::vk {
     // ============================================================
 
     RHITextureHandle RHIDeviceVulkan::CreateTexture(TextureDescriptor&& descriptor) {
+        OZZ_PROFILE_FUNCTION;
         VkImageCreateInfo imageCreateInfo {
             .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
             .pNext = nullptr,
@@ -1723,6 +1743,7 @@ namespace OZZ::rendering::vk {
     }
 
     void RHIDeviceVulkan::UpdateTexture(const RHITextureHandle& handle, const void* data, size_t size) {
+        OZZ_PROFILE_FUNCTION;
         // Create a staging buffer
         auto stagingBufferHandle =
             CreateBuffer({.Size = size, .Usage = BufferUsage::TransferSource, .Access = BufferMemoryAccess::CpuToGpu});
@@ -1783,12 +1804,14 @@ namespace OZZ::rendering::vk {
     }
 
     void RHIDeviceVulkan::FreeTexture(RHITextureHandle handle) {
+        OZZ_PROFILE_FUNCTION;
         perFrameDeletions[currentFrame].emplace_back([this, handle]() {
             texturePool.Free(handle);
         });
     }
 
     RHIShaderHandle RHIDeviceVulkan::CreateShader(ShaderFileParams&& shaderFiles) {
+        OZZ_PROFILE_FUNCTION;
         std::ifstream vertexFile(shaderFiles.Vertex);
         std::ifstream fragmentFile(shaderFiles.Fragment);
 
@@ -1815,6 +1838,7 @@ namespace OZZ::rendering::vk {
     }
 
     RHIShaderHandle RHIDeviceVulkan::CreateShader(ShaderSourceParams&& shaderSources) {
+        OZZ_PROFILE_FUNCTION;
         RHIShaderVulkan shader {device, std::move(shaderSources)};
         if (!shader.IsCompiled()) {
             spdlog::error("Failed to compile shader. Aborting.");
@@ -1890,6 +1914,7 @@ namespace OZZ::rendering::vk {
 
     std::pair<RHIPipelineLayoutHandle, std::set<RHIDescriptorSetLayoutHandle>>
     RHIDeviceVulkan::CreatePipelineLayout(const RHIPipelineLayoutDescriptor& pipelineLayoutDescriptor) {
+        OZZ_PROFILE_FUNCTION;
         std::set<RHIDescriptorSetLayoutHandle> descriptorSetLayoutHandles;
         RHIPipelineLayoutHandle pipelineLayoutHandle {RHIPipelineLayoutHandle::Null()};
         auto cleanOnFailure = [&]() {
@@ -1987,6 +2012,7 @@ namespace OZZ::rendering::vk {
     }
 
     RHIBufferHandle RHIDeviceVulkan::CreateBuffer(BufferDescriptor&& bufferDescriptor) {
+        OZZ_PROFILE_FUNCTION;
         std::array<RHIBufferVulkan, MaxFramesInFlight> buffers;
         size_t createdBuffers = 0;
 
@@ -2038,6 +2064,7 @@ namespace OZZ::rendering::vk {
 
     void
     RHIDeviceVulkan::UpdateBuffer(const RHIBufferHandle& bufferHandle, const void* data, size_t size, size_t offset) {
+        OZZ_PROFILE_FUNCTION;
         const auto buffers = bufferResourcePool.Get(bufferHandle);
         if (!buffers) {
             spdlog::error("Failed to update buffer. Buffer handle is invalid.");
