@@ -114,6 +114,8 @@ namespace OZZ::rendering::vk {
             graphicsQueue = VK_NULL_HANDLE;
         }
 
+        OZZ_GPU_CONTEXT_DESTROY(tracyGpuContext);
+
         for (const auto buffer : transientCommandBuffers) {
             vkFreeCommandBuffers(device, transientCommandBufferPool, 1, &buffer);
         }
@@ -320,6 +322,25 @@ namespace OZZ::rendering::vk {
         if (!createDescriptorPool()) {
             failureMessage();
             return false;
+        }
+
+        // Create Tracy GPU profiling context
+        {
+            VkCommandBufferAllocateInfo allocInfo {
+                .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+                .commandPool = commandBufferPool,
+                .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+                .commandBufferCount = 1,
+            };
+            VkCommandBuffer tracyCmdBuf;
+            if (vkAllocateCommandBuffers(device, &allocInfo, &tracyCmdBuf) == VK_SUCCESS) {
+                tracyGpuContext = OZZ_GPU_CONTEXT_CREATE(physicalDevices.SelectedDevice().Device,
+                                                       device,
+                                                       graphicsQueue,
+                                                       tracyCmdBuf);
+                OZZ_GPU_CONTEXT_NAME(tracyGpuContext, "Graphics", 8);
+                vkFreeCommandBuffers(device, commandBufferPool, 1, &tracyCmdBuf);
+            }
         }
 
         spdlog::info("Successfully initialized Vulkan RHI device");
@@ -980,6 +1001,7 @@ namespace OZZ::rendering::vk {
                                });
 
         auto commandBuffer = commandBufferResourcePool.Get(frameContext.GetCommandBuffer());
+        OZZ_GPU_COLLECT(tracyGpuContext, *commandBuffer);
         if (const auto result = vkEndCommandBuffer(*commandBuffer); result != VK_SUCCESS) {
             spdlog::error("Failed to end command buffer in SubmitFrame. Error: {}", static_cast<int>(result));
             return;
@@ -1042,6 +1064,7 @@ namespace OZZ::rendering::vk {
 
     void RHIDeviceVulkan::beginRenderPassInternal(VkCommandBuffer cmd,
                                                   const RenderPassDescriptor& renderPassDescriptor) {
+        OZZ_GPU_ZONE(tracyGpuContext, cmd, "BeginRenderPass");
         std::vector<VkRenderingAttachmentInfo> colorAttachments;
         bool bHasDepthAttachment = false;
         bool bHasStencilAttachment = false;
@@ -1144,6 +1167,7 @@ namespace OZZ::rendering::vk {
     }
 
     void RHIDeviceVulkan::endRenderPassInternal(VkCommandBuffer cmd) {
+        OZZ_GPU_ZONE(tracyGpuContext, cmd, "EndRenderPass");
         vkCmdEndRendering(cmd);
     }
 
@@ -1260,6 +1284,7 @@ namespace OZZ::rendering::vk {
 
     void RHIDeviceVulkan::setGraphicsStateInternal(VkCommandBuffer cmd,
                                                    const GraphicsStateDescriptor& graphicsStateDescriptor) {
+        OZZ_GPU_ZONE(tracyGpuContext, cmd, "SetGraphicsState");
         // Input Assembly
         vkCmdSetPrimitiveTopology(cmd,
                                   ConvertPrimitiveTopologyToVulkan(graphicsStateDescriptor.InputAssembly.Topology));
@@ -1373,6 +1398,7 @@ namespace OZZ::rendering::vk {
     }
 
     void RHIDeviceVulkan::bindShaderInternal(VkCommandBuffer cmd, const RHIShaderHandle& shaderHandle) {
+        OZZ_GPU_ZONE(tracyGpuContext, cmd, "BindShader");
         if (const auto* shader = shaderResourcePool.Get(shaderHandle)) {
             shader->Bind(device, cmd);
         }
@@ -1481,6 +1507,7 @@ namespace OZZ::rendering::vk {
                                        uint32_t instanceCount,
                                        uint32_t firstVertex,
                                        uint32_t firstInstance) {
+        OZZ_GPU_ZONE(tracyGpuContext, cmd, "Draw");
         vkCmdDraw(cmd, vertexCount, instanceCount, firstVertex, firstInstance);
     }
 
@@ -1505,6 +1532,7 @@ namespace OZZ::rendering::vk {
                                               uint32_t firstIndex,
                                               int32_t vertexOffset,
                                               uint32_t firstInstance) {
+        OZZ_GPU_ZONE(tracyGpuContext, cmd, "DrawIndexed");
         vkCmdDrawIndexed(cmd, indexCount, instanceCount, firstIndex, vertexOffset, firstInstance);
     }
 

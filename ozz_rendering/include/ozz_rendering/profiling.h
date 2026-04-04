@@ -33,3 +33,23 @@
 #define OZZ_PROFILE_FREE(ptr)
 
 #endif
+
+// GPU profiling macros — files that use these must include TracyVulkan.hpp
+// (via Vulkan headers) before expanding them.
+#ifdef OZZ_PROFILING_ENABLED
+
+#define OZZ_GPU_CONTEXT_CREATE(physdev, device, queue, cmdbuf) TracyVkContext(physdev, device, queue, cmdbuf)
+#define OZZ_GPU_CONTEXT_DESTROY(ctx) TracyVkDestroy(ctx)
+#define OZZ_GPU_CONTEXT_NAME(ctx, name, len) TracyVkContextName(ctx, name, len)
+#define OZZ_GPU_ZONE(ctx, cmdbuf, name) TracyVkZone(ctx, cmdbuf, name)
+#define OZZ_GPU_COLLECT(ctx, cmdbuf) TracyVkCollect(ctx, cmdbuf)
+
+#else
+
+#define OZZ_GPU_CONTEXT_CREATE(...) nullptr
+#define OZZ_GPU_CONTEXT_DESTROY(ctx)
+#define OZZ_GPU_CONTEXT_NAME(ctx, name, len)
+#define OZZ_GPU_ZONE(ctx, cmdbuf, name)
+#define OZZ_GPU_COLLECT(ctx, cmdbuf)
+
+#endif

@@ -12,6 +12,16 @@
 #include "utils/physical_devices.h"
 
 #include <ozz_rendering/rhi_device.h>
+#include <ozz_rendering/profiling.h>
+
+// TracyVulkan.hpp provides TracyVkCtx type and the TracyVk* macros that
+// the OZZ_GPU_* macros in profiling.h expand to.  It must come after
+// Vulkan headers (volk.h is pulled in above via rhi_texture_vulkan.h).
+#ifdef OZZ_PROFILING_ENABLED
+#include <tracy/TracyVulkan.hpp>
+#else
+using TracyVkCtx = void*;
+#endif
 
 namespace OZZ::rendering::vk {
     constexpr uint32_t MaxFramesInFlight = 2;
@@ -209,5 +219,8 @@ namespace OZZ::rendering::vk {
         ResourcePool<DescriptorSetTag, VkDescriptorSet> descriptorSetResourcePool;
 
         VkDescriptorPool descriptorPool {VK_NULL_HANDLE};
+
+        // Tracy GPU profiling context
+        TracyVkCtx tracyGpuContext {nullptr};
     };
 } // namespace OZZ::rendering::vk
