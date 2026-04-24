@@ -3,7 +3,7 @@
 //
 
 #pragma once
-#include <vma/vk_mem_alloc.h>
+#include <vk_mem_alloc.h>
 #include <volk.h>
 
 namespace OZZ::rendering::vk {

@@ -14,6 +14,8 @@
 #include <ozz_rendering/rhi_device.h>
 #include <ozz_rendering/profiling.h>
 
+#include <array>
+
 // TracyVulkan.hpp provides TracyVkCtx type and the TracyVk* macros that
 // the OZZ_GPU_* macros in profiling.h expand to.  It must come after
 // Vulkan headers (volk.h is pulled in above via rhi_texture_vulkan.h).

@@ -5,7 +5,7 @@
 #pragma once
 #include "ozz_rendering/rhi_buffer.h"
 
-#include <vma/vk_mem_alloc.h>
+#include <vk_mem_alloc.h>
 
 namespace OZZ::rendering::vk {
     struct RHIBufferVulkan {

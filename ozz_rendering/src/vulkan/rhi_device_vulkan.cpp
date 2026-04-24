@@ -1422,7 +1422,8 @@ namespace OZZ::rendering::vk {
         const auto buffer = (*buffers)[frameIndex];
 
         if (has(buffer.Usage, BufferUsage::VertexBuffer)) {
-            vkCmdBindVertexBuffers2(cmd, 0, 1, &buffer.Buffer, (VkDeviceSize[]) {0}, nullptr, nullptr);
+            VkDeviceSize sizes[] = {0};
+            vkCmdBindVertexBuffers2(cmd, 0, 1, &buffer.Buffer, sizes, nullptr, nullptr);
             return;
         }
 

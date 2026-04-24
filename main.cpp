@@ -18,6 +18,7 @@
 #include "ozz_rendering/rhi_device.h"
 
 #include <cstdlib>
+#include <array>
 #include <glm/glm.hpp>
 
 struct UBOObject {
@@ -185,7 +186,7 @@ int main() {
     std::filesystem::path imagePath = std::filesystem::current_path() / "assets" / "images" / "texture.jpg";
     int texWidth, texHeight, texChannels;
     stbi_set_flip_vertically_on_load(true);
-    stbi_uc* pixels = stbi_load(imagePath.c_str(), &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
+    stbi_uc* pixels = stbi_load(imagePath.string().c_str(), &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
     VkDeviceSize imageSize = texWidth * texHeight * 4;
 
     if (!pixels) {

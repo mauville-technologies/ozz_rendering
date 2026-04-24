@@ -1,7 +1,7 @@
 project(ozz_rendering_third_party)
 include(FetchContent)
 
-find_package(Vulkan REQUIRED COMPONENTS SPIRV-Tools)
+find_package(Vulkan REQUIRED)
 
 if (NOT TARGET spdlog)
     FetchContent_Declare(
@@ -36,7 +36,8 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(spirvreflect_lib)
 
-set(ALLOW_EXTERNAL_SPIRV_TOOLS ON)
+set(ENABLE_OPT OFF CACHE BOOL "Disable glslang optimizer support; runtime shader compilation does not require SPIRV-Tools-opt" FORCE)
+set(ALLOW_EXTERNAL_SPIRV_TOOLS OFF CACHE BOOL "Do not look for an external SPIRV-Tools-opt package" FORCE)
 FetchContent_Declare(
         glslanglib
         GIT_REPOSITORY https://github.com/KhronosGroup/glslang.git
@@ -51,7 +52,6 @@ target_link_libraries(${PROJECT_NAME}
         INTERFACE
         Vulkan::Headers
         volk
-        Vulkan::SPIRV-Tools
         spirv-reflect-static
         spdlog
         glslang
