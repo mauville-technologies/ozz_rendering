@@ -4,7 +4,9 @@
 
 #pragma once
 #include <cstdint>
+#include <deque>
 #include <functional>
+#include <mutex>
 #include <optional>
 #include <vector>
 
@@ -28,22 +30,26 @@ namespace OZZ::rendering {
 
         ~ResourcePool() { Empty(); }
 
-        std::vector<ResourcePoolSlot<ResourceType>> Slots;
+        // std::deque: push_back does not invalidate references to existing elements,
+        // so pointers returned by Get() remain valid across concurrent Allocate() calls.
+        std::deque<ResourcePoolSlot<ResourceType>> Slots;
         std::vector<uint32_t> FreeIndices;
 
         bool IsValidHandle(const RHIHandle<Tag>& handle) const {
-            return handle.Id < Slots.size() && Slots[handle.Id].Generation == handle.Generation &&
-                   Slots[handle.Id].Occupied();
+            std::lock_guard lock(mutex);
+            return isValidHandleNoLock(handle);
         }
 
         ResourceType* Get(const RHIHandle<Tag>& handle) {
-            if (IsValidHandle(handle)) {
+            std::lock_guard lock(mutex);
+            if (isValidHandleNoLock(handle)) {
                 return &Slots[handle.Id].Resource.value();
             }
             return nullptr;
         }
 
         RHIHandle<Tag> Allocate(ResourceType&& resource) {
+            std::lock_guard lock(mutex);
             uint32_t index;
             if (!FreeIndices.empty()) {
                 index = FreeIndices.back();
@@ -60,18 +66,19 @@ namespace OZZ::rendering {
         }
 
         void Free(const RHIHandle<Tag>& handle) {
-            if (IsValidHandle(handle)) {
+            std::lock_guard lock(mutex);
+            if (isValidHandleNoLock(handle)) {
                 if (auto& slot = Slots[handle.Id]; slot.Occupied()) {
                     destroyFunction(Slots[handle.Id].Resource.value());
                     Slots[handle.Id].Resource.reset();
                     FreeIndices.push_back(handle.Id);
-
                     ++slot.Generation;
                 }
             }
         }
 
         void Empty() {
+            std::lock_guard lock(mutex);
             for (auto& slot : Slots) {
                 if (slot.Occupied()) {
                     destroyFunction(slot.Resource.value());
@@ -83,6 +90,12 @@ namespace OZZ::rendering {
         }
 
     private:
+        bool isValidHandleNoLock(const RHIHandle<Tag>& handle) const {
+            return handle.Id < Slots.size() && Slots[handle.Id].Generation == handle.Generation &&
+                   Slots[handle.Id].Occupied();
+        }
+
         DestroyFunction destroyFunction;
+        mutable std::mutex mutex;
     };
 } // namespace OZZ::rendering

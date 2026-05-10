@@ -829,10 +829,14 @@ namespace OZZ::rendering::vk {
         };
 
         VkCommandBuffer commandBuffer;
-        if (const auto result = vkAllocateCommandBuffers(device, &allocateInfo, &commandBuffer); result != VK_SUCCESS) {
-            spdlog::error("Failed to allocate command buffer for single time commands. Error: {}",
-                          static_cast<int>(result));
-            return VK_NULL_HANDLE;
+        {
+            std::lock_guard lock(transientCmdPoolMutex);
+            if (const auto result = vkAllocateCommandBuffers(device, &allocateInfo, &commandBuffer);
+                result != VK_SUCCESS) {
+                spdlog::error("Failed to allocate command buffer for single time commands. Error: {}",
+                              static_cast<int>(result));
+                return VK_NULL_HANDLE;
+            }
         }
 
         VkCommandBufferBeginInfo beginInfo {
@@ -844,16 +848,22 @@ namespace OZZ::rendering::vk {
         if (const auto result = vkBeginCommandBuffer(commandBuffer, &beginInfo); result != VK_SUCCESS) {
             spdlog::error("Failed to begin command buffer for single time commands. Error: {}",
                           static_cast<int>(result));
+            std::lock_guard lock(transientCmdPoolMutex);
+            vkFreeCommandBuffers(device, transientCommandBufferPool, 1, &commandBuffer);
             return VK_NULL_HANDLE;
         }
 
-        transientCommandBuffers.insert(commandBuffer);
+        {
+            std::lock_guard lock(transientCmdPoolMutex);
+            transientCommandBuffers.insert(commandBuffer);
+        }
         return commandBuffer;
     }
 
     void RHIDeviceVulkan::endSingleTimeCommands(VkCommandBuffer commandBuffer) {
         const auto cleanCommandBuffer = [this](VkCommandBuffer cmdBuffer) {
             const auto commandBufferCopy = cmdBuffer;
+            std::lock_guard lock(transientCmdPoolMutex);
             vkFreeCommandBuffers(device, transientCommandBufferPool, 1, &cmdBuffer);
             transientCommandBuffers.erase(commandBufferCopy);
         };
@@ -881,17 +891,19 @@ namespace OZZ::rendering::vk {
         if (const auto result = vkCreateFence(device, &fenceCreateInfo, nullptr, &submitFence); result != VK_SUCCESS) {
             spdlog::error("Failed to create fence for single time command submission. Error: {}",
                           static_cast<int>(result));
-            // destroy the command buffer before returning
             cleanCommandBuffer(commandBuffer);
             return;
         }
 
-        if (const auto result = vkQueueSubmit(graphicsQueue, 1, &submitInfo, submitFence); result != VK_SUCCESS) {
-            spdlog::error("Failed to submit command buffer for single time commands. Error: {}",
-                          static_cast<int>(result));
-            vkDestroyFence(device, submitFence, nullptr);
-            cleanCommandBuffer(commandBuffer);
-            return;
+        {
+            std::lock_guard lock(graphicsQueueMutex);
+            if (const auto result = vkQueueSubmit(graphicsQueue, 1, &submitInfo, submitFence); result != VK_SUCCESS) {
+                spdlog::error("Failed to submit command buffer for single time commands. Error: {}",
+                              static_cast<int>(result));
+                vkDestroyFence(device, submitFence, nullptr);
+                cleanCommandBuffer(commandBuffer);
+                return;
+            }
         }
 
         vkWaitForFences(device, 1, &submitFence, VK_TRUE, UINT64_MAX);
@@ -1022,13 +1034,16 @@ namespace OZZ::rendering::vk {
             .pSignalSemaphores = &presentCompleteSemaphores[imageIndex],
         };
 
-        if (const auto result = vkQueueSubmit(graphicsQueue, 1, &submitInfo, submissionContext.InFlightFence)) {
-            spdlog::error("Failed to submit command buffer in SubmitFrame. Error: {} | {} / {} | {:x}",
-                          static_cast<int>(result),
-                          imageIndex,
-                          frameNumber,
-                          reinterpret_cast<uint64_t>(presentCompleteSemaphores[imageIndex]));
-            return;
+        {
+            std::lock_guard lock(graphicsQueueMutex);
+            if (const auto result = vkQueueSubmit(graphicsQueue, 1, &submitInfo, submissionContext.InFlightFence)) {
+                spdlog::error("Failed to submit command buffer in SubmitFrame. Error: {} | {} / {} | {:x}",
+                              static_cast<int>(result),
+                              imageIndex,
+                              frameNumber,
+                              reinterpret_cast<uint64_t>(presentCompleteSemaphores[imageIndex]));
+                return;
+            }
         }
 
         VkPresentInfoKHR presentInfo {
@@ -1042,11 +1057,14 @@ namespace OZZ::rendering::vk {
             .pResults = VK_NULL_HANDLE,
         };
 
-        if (const auto result = vkQueuePresentKHR(graphicsQueue, &presentInfo);
-            result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
-            recreateSwapchain();
-        } else if (result != VK_SUCCESS) {
-            spdlog::error("Failed to present frame in SubmitFrame. Error: {}", static_cast<int>(result));
+        {
+            std::lock_guard lock(graphicsQueueMutex);
+            if (const auto result = vkQueuePresentKHR(graphicsQueue, &presentInfo);
+                result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
+                recreateSwapchain();
+            } else if (result != VK_SUCCESS) {
+                spdlog::error("Failed to present frame in SubmitFrame. Error: {}", static_cast<int>(result));
+            }
         }
 
         currentFrame = (currentFrame + 1) % framesInFlight;

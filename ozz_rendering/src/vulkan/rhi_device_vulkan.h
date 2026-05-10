@@ -15,6 +15,7 @@
 #include <ozz_rendering/profiling.h>
 
 #include <array>
+#include <mutex>
 
 // TracyVulkan.hpp provides TracyVkCtx type and the TracyVk* macros that
 // the OZZ_GPU_* macros in profiling.h expand to.  It must come after
@@ -210,6 +211,8 @@ namespace OZZ::rendering::vk {
 
         std::set<VkCommandBuffer> transientCommandBuffers;
         VkCommandPool transientCommandBufferPool {VK_NULL_HANDLE};
+        std::mutex graphicsQueueMutex;
+        std::mutex transientCmdPoolMutex;
 
         // resource pools
         ResourcePool<TextureTag, RHITextureVulkan> texturePool;
