@@ -54,3 +54,20 @@ set_target_properties(${PROJECT_NAME} PROPERTIES
         ARCHIVE_OUTPUT_DIRECTORY ${OZZ_OUTPUT_BASE_DIR}/${PROJECT_NAME}
 )
 
+if(OZZ_ENABLE_WEBGPU)
+    add_executable(ozz_rendering_webgpu_test main_webgpu.cpp)
+    target_link_libraries(ozz_rendering_webgpu_test PRIVATE ozz_rendering glfw)
+    set_target_properties(ozz_rendering_webgpu_test PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY ${OZZ_OUTPUT_BASE_DIR}/ozz_rendering_webgpu_test
+    )
+    # Copy webgpu_dawn.dll and slang.dll next to the test executable at build time
+    add_custom_command(TARGET ozz_rendering_webgpu_test POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                $<TARGET_FILE:webgpu_dawn>
+                $<TARGET_FILE_DIR:ozz_rendering_webgpu_test>
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                $<TARGET_FILE:slang>
+                $<TARGET_FILE_DIR:ozz_rendering_webgpu_test>
+    )
+endif()
+

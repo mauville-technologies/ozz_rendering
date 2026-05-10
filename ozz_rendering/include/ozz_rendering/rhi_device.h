@@ -29,6 +29,7 @@ namespace OZZ::rendering {
         Auto,
         Vulkan,
         OpenGL,
+        WebGPU,
     };
 
     struct PlatformContext {
