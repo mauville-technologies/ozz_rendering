@@ -19,6 +19,14 @@ set(SOURCES
         src/vulkan/rhi_shader_vulkan.cpp
         src/vulkan/rhi_texture_vulkan.cpp
 )
+
+if(OZZ_ENABLE_WEBGPU)
+    list(APPEND SOURCES
+            src/webgpu/rhi_device_webgpu.cpp
+            src/webgpu/rhi_shader_webgpu.cpp
+    )
+endif()
+
 add_library(${PROJECT_NAME} STATIC ${SOURCES})
 
 target_link_libraries(${PROJECT_NAME}
