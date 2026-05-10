@@ -1842,7 +1842,7 @@ namespace OZZ::rendering::vk {
                                            .OldLayout = TextureLayout::TransferDst,
                                            .NewLayout = TextureLayout::ShaderReadOnly,
                                            .SrcStage = PipelineStage::Transfer,
-                                           .DstStage = PipelineStage::AllGraphics,
+                                           .DstStage = PipelineStage::FragmentShader,
                                            .SrcAccess = Access::TransferWrite,
                                            .DstAccess = Access::ShaderRead,
                                        });
