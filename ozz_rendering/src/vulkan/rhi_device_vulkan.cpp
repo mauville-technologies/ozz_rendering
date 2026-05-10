@@ -787,8 +787,18 @@ namespace OZZ::rendering::vk {
             }
         }
 
-        // Wait for all in-flight work to complete before touching any resources.
-        vkDeviceWaitIdle(device);
+        // Wait only for in-flight frame fences rather than the entire device,
+        // avoiding a stall on unrelated queues (e.g. transfer, compute).
+        std::vector<VkFence> fences;
+        fences.reserve(submissionContexts.size());
+        for (const auto& ctx : submissionContexts) {
+            if (ctx.InFlightFence != VK_NULL_HANDLE) {
+                fences.push_back(ctx.InFlightFence);
+            }
+        }
+        if (!fences.empty()) {
+            vkWaitForFences(device, static_cast<uint32_t>(fences.size()), fences.data(), VK_TRUE, UINT64_MAX);
+        }
 
         if (!physicalDevices.RefreshSurfaceCapabilities(surface)) {
             spdlog::error("Failed to refresh surface capabilities during swapchain recreation");
