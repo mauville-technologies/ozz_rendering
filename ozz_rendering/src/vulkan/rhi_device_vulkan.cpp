@@ -1083,7 +1083,8 @@ namespace OZZ::rendering::vk {
     void RHIDeviceVulkan::beginRenderPassInternal(VkCommandBuffer cmd,
                                                   const RenderPassDescriptor& renderPassDescriptor) {
         OZZ_GPU_ZONE(tracyGpuContext, cmd, "BeginRenderPass");
-        std::vector<VkRenderingAttachmentInfo> colorAttachments;
+        std::array<VkRenderingAttachmentInfo, MaxColorAttachments> colorAttachments;
+        uint32_t colorAttachmentCount = 0;
         bool bHasDepthAttachment = false;
         bool bHasStencilAttachment = false;
         VkRenderingAttachmentInfo depthAttachment;
@@ -1115,7 +1116,7 @@ namespace OZZ::rendering::vk {
                 .storeOp = ConvertStoreOpToVulkan(attachment.Store),
                 .clearValue = clearValue,
             };
-            colorAttachments.emplace_back(attachmentInfo);
+            colorAttachments[colorAttachmentCount++] = attachmentInfo;
         }
 
         if (renderPassDescriptor.DepthAttachment.Texture != RHITextureHandle::Null()) {
@@ -1168,7 +1169,7 @@ namespace OZZ::rendering::vk {
                         },
                 },
             .layerCount = 1,
-            .colorAttachmentCount = static_cast<uint32_t>(colorAttachments.size()),
+            .colorAttachmentCount = colorAttachmentCount,
             .pColorAttachments = colorAttachments.data(),
             .pDepthAttachment = bHasDepthAttachment ? &depthAttachment : nullptr,
             .pStencilAttachment = bHasStencilAttachment ? &stencilAttachment
