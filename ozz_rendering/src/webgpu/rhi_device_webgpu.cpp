@@ -4,6 +4,8 @@
 
 #include <ozz_rendering/rhi_renderpass.h>
 
+#include <dawn/dawn_proc.h>
+#include <dawn/native/DawnNative.h>
 #include <slang.h>
 #include <spdlog/spdlog.h>
 
@@ -74,6 +76,9 @@ namespace OZZ::rendering::webgpu {
     // -------------------------------------------------------------------------
 
     void RHIDeviceWebGPU::initialize() {
+        // Register Dawn native procs (required for static/non-monolithic Dawn linking)
+        dawnProcSetProcs(&dawn::native::GetProcs());
+
         // Slang global session (one per process is typical, but per-device is fine)
         if (SLANG_FAILED(slang_createGlobalSession(SLANG_API_VERSION, &slangSession)) || !slangSession)
             throw std::runtime_error("Failed to create Slang session");
