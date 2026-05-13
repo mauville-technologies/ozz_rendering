@@ -1067,14 +1067,18 @@ namespace OZZ::rendering::vk {
             .pResults = VK_NULL_HANDLE,
         };
 
+        bool bNeedsRecreate = false;
         {
             std::lock_guard lock(graphicsQueueMutex);
             if (const auto result = vkQueuePresentKHR(graphicsQueue, &presentInfo);
                 result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
-                recreateSwapchain();
+                bNeedsRecreate = true;
             } else if (result != VK_SUCCESS) {
                 spdlog::error("Failed to present frame in SubmitFrame. Error: {}", static_cast<int>(result));
             }
+        }
+        if (bNeedsRecreate) {
+            recreateSwapchain();
         }
 
         currentFrame = (currentFrame + 1) % framesInFlight;
