@@ -108,6 +108,20 @@ namespace OZZ::rendering::webgpu {
         // Device
         WGPUDeviceDescriptor deviceDesc = {};
         deviceDesc.label = "ozz_rendering_webgpu";
+        deviceDesc.uncapturedErrorCallbackInfo.callback =
+            [](WGPUErrorType type, char const* message, void*) {
+                spdlog::error("WebGPU error ({}): {}", static_cast<int>(type),
+                              message ? message : "");
+            };
+        deviceDesc.deviceLostCallbackInfo.mode = WGPUCallbackMode_AllowSpontaneous;
+        deviceDesc.deviceLostCallbackInfo.callback =
+            [](WGPUDevice const*, WGPUDeviceLostReason reason, char const* message, void*) {
+                // Destroyed and InstanceDropped are expected at shutdown; only log real losses.
+                if (reason != WGPUDeviceLostReason_Destroyed &&
+                    reason != WGPUDeviceLostReason_InstanceDropped)
+                    spdlog::error("WebGPU device lost ({}): {}", static_cast<int>(reason),
+                                  message ? message : "");
+            };
         wgpuAdapterRequestDevice(
             adapter, &deviceDesc,
             [](WGPURequestDeviceStatus status, WGPUDevice d, char const*, void* ud) {
@@ -116,14 +130,6 @@ namespace OZZ::rendering::webgpu {
             },
             &device);
         if (!device) throw std::runtime_error("Failed to create WebGPU device");
-
-        wgpuDeviceSetUncapturedErrorCallback(
-            device,
-            [](WGPUErrorType type, char const* message, void*) {
-                spdlog::error("WebGPU error ({}): {}", static_cast<int>(type),
-                              message ? message : "");
-            },
-            nullptr);
 
         queue = wgpuDeviceGetQueue(device);
 
