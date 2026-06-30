@@ -332,7 +332,7 @@ namespace OZZ::rendering::vk {
         }
         if (!module) {
             spdlog::error("Slang: shader module load failed");
-            session->release();
+            slangCompileSession = session;
             return std::nullopt;
         }
 
@@ -346,14 +346,14 @@ namespace OZZ::rendering::vk {
         if (!vertEP) {
             spdlog::error("Slang: no 'vertexMain' entry point found");
             module->release();
-            session->release();
+            slangCompileSession = session;
             return std::nullopt;
         }
         if (!fragEP) {
             spdlog::error("Slang: no 'fragmentMain' entry point found");
             if (vertEP) vertEP->release();
             module->release();
-            session->release();
+            slangCompileSession = session;
             return std::nullopt;
         }
 
@@ -373,7 +373,7 @@ namespace OZZ::rendering::vk {
             vertEP->release();
             fragEP->release();
             module->release();
-            session->release();
+            slangCompileSession = session;
             return std::nullopt;
         }
 
@@ -400,7 +400,7 @@ namespace OZZ::rendering::vk {
         vertEP->release();
         fragEP->release();
         module->release();
-        session->release();
+        slangCompileSession = session;
 
         if (compiled.VertexSpirv.empty()) {
             spdlog::error("Slang: failed to extract vertex SPIR-V");

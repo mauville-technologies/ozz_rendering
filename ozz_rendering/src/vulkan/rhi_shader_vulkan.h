@@ -84,6 +84,9 @@ namespace OZZ::rendering::vk {
 
 #ifdef OZZ_SLANG_ENABLED
         slang::IGlobalSession* slangSession {nullptr};
+        // Slang 2026.8.1 bug: session->release() triggers heap corruption for some
+        // shaders. Hold the compile session alive; OS reclaims at program exit.
+        slang::ISession* slangCompileSession {nullptr};
 #endif
     };
 
