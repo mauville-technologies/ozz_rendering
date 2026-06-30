@@ -376,7 +376,9 @@ namespace OZZ::rendering::vk {
             case DescriptorType::CombinedImageSampler:
                 return VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             case DescriptorType::SampledImage:
+                return VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
             case DescriptorType::Sampler:
+                return VK_DESCRIPTOR_TYPE_SAMPLER;
             case DescriptorType::StorageImage:
                 spdlog::error("Descriptor type {} not implemented yet", static_cast<int>(type));
         }

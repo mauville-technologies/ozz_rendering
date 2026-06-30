@@ -1654,6 +1654,33 @@ namespace OZZ::rendering::vk {
                     .range = write.Buffer.Range,
                 });
                 vkWrite.pBufferInfo = &bufferInfos.back();
+                vkWrites.push_back(vkWrite);
+            } else if (write.Type == DescriptorType::SampledImage) {
+                const auto* texture = texturePool.Get(write.Image.Texture);
+                if (!texture) {
+                    spdlog::error("UpdateDescriptorSet: invalid texture handle at binding {}", write.Binding);
+                    continue;
+                }
+                imageInfos.push_back({
+                    .sampler = VK_NULL_HANDLE,
+                    .imageView = texture->ImageView,
+                    .imageLayout = ConvertTextureLayoutToVulkan(TextureLayout::ShaderReadOnly),
+                });
+                vkWrite.pImageInfo = &imageInfos.back();
+                vkWrites.push_back(vkWrite);
+                // auto-write sampler at binding+1 (mirrors WebGPU UpdateDescriptorSet convention)
+                if (texture->Sampler != VK_NULL_HANDLE) {
+                    imageInfos.push_back({
+                        .sampler = texture->Sampler,
+                        .imageView = VK_NULL_HANDLE,
+                        .imageLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+                    });
+                    VkWriteDescriptorSet samplerWrite = vkWrite;
+                    samplerWrite.dstBinding = write.Binding + 1;
+                    samplerWrite.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
+                    samplerWrite.pImageInfo = &imageInfos.back();
+                    vkWrites.push_back(samplerWrite);
+                }
             } else {
                 const auto* texture = texturePool.Get(write.Image.Texture);
                 if (!texture) {
@@ -1665,11 +1692,9 @@ namespace OZZ::rendering::vk {
                     .imageView = texture->ImageView,
                     .imageLayout = ConvertTextureLayoutToVulkan(TextureLayout::ShaderReadOnly),
                 });
-
                 vkWrite.pImageInfo = &imageInfos.back();
+                vkWrites.push_back(vkWrite);
             }
-
-            vkWrites.push_back(vkWrite);
         }
 
         vkUpdateDescriptorSets(device, static_cast<uint32_t>(vkWrites.size()), vkWrites.data(), 0, nullptr);
