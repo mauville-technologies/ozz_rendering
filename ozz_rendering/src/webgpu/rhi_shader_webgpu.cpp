@@ -105,13 +105,17 @@ namespace OZZ::rendering::webgpu {
             }
         }
 
-        SlangUInt gcbBinding = layout->getGlobalConstantBufferBinding();
-        if (gcbBinding != SLANG_UNBOUNDED_SIZE && gcbBinding != SLANG_UNKNOWN_SIZE) {
-            result.PushConstants[result.PushConstantCount++] = {
-                ShaderStageFlags::Vertex | ShaderStageFlags::Fragment,
-                0,
-                256,
-            };
+        // getGlobalConstantBufferBinding: implicit aggregated constant buffer (rare in
+        // explicit-binding shaders). Only add if the set-3 path hasn't already done so.
+        if (result.PushConstantCount == 0) {
+            SlangUInt gcbBinding = layout->getGlobalConstantBufferBinding();
+            if (gcbBinding != SLANG_UNBOUNDED_SIZE && gcbBinding != SLANG_UNKNOWN_SIZE) {
+                result.PushConstants[result.PushConstantCount++] = {
+                    ShaderStageFlags::Vertex | ShaderStageFlags::Fragment,
+                    0,
+                    256,
+                };
+            }
         }
 
         return result;
@@ -188,10 +192,9 @@ namespace OZZ::rendering::webgpu {
         }
         if (!module) {
             spdlog::error("Slang: shader module load failed");
-            session->release();
+            slangCompileSession = session;  // hold to avoid corrupt-free crash
             return false;
         }
-
         // For Slang shaders both entry points live in params.Vertex (combined source).
         // Always search for both; Slang returns null non-fatally if one is absent.
         slang::IEntryPoint* vertEP = nullptr;
@@ -202,7 +205,6 @@ namespace OZZ::rendering::webgpu {
         module->findAndCheckEntryPoint(
             fragmentEntryPoint.c_str(), SLANG_STAGE_FRAGMENT, &fragEP, &diagBlob);
         if (diagBlob) { diagBlob->release(); diagBlob = nullptr; }
-
         std::vector<slang::IComponentType*> comps;
         comps.push_back(module);
         if (vertEP) comps.push_back(vertEP);
@@ -225,7 +227,7 @@ namespace OZZ::rendering::webgpu {
             if (vertEP) vertEP->release();
             if (fragEP) fragEP->release();
             module->release();
-            session->release();
+            slangCompileSession = session;  // hold to avoid corrupt-free crash
             return false;
         }
 
@@ -240,7 +242,11 @@ namespace OZZ::rendering::webgpu {
             ISlangBlob* codeBlob = nullptr;
             if (SLANG_FAILED(linked->getEntryPointCode(compEPIdx, 0, &codeBlob, &diagBlob))
                     || !codeBlob) {
-                if (diagBlob) { diagBlob->release(); diagBlob = nullptr; }
+                if (diagBlob) {
+                    spdlog::error("Slang WGSL gen failed ({}): {}", label,
+                                  static_cast<const char*>(diagBlob->getBufferPointer()));
+                    diagBlob->release(); diagBlob = nullptr;
+                }
                 return nullptr;
             }
             if (diagBlob) { diagBlob->release(); diagBlob = nullptr; }
@@ -257,7 +263,10 @@ namespace OZZ::rendering::webgpu {
         if (vertEP) vertEP->release();
         if (fragEP) fragEP->release();
         module->release();
-        session->release();
+        // Slang 2026.8.1 bug: session->release() triggers "free(): corrupted unsorted
+        // chunks" for shaders that generate std140 matrix wrapper types in WGSL.
+        // Keep the session alive; the OS reclaims memory at program exit.
+        slangCompileSession = session;
 
         return vertexModule != nullptr;
     }
