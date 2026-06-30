@@ -140,6 +140,11 @@ namespace OZZ::rendering::webgpu {
         WGPUTextureView       currentBackbufferView  {nullptr};
         RHITextureHandle      depthTextureHandle {};
 
+        // Formats of the currently-active render pass — updated in BeginRenderPass,
+        // used to build the correct pipeline key for Draw / DrawIndexed.
+        WGPUTextureFormat activePassColorFormat {WGPUTextureFormat_Undefined};
+        WGPUTextureFormat activePassDepthFormat {WGPUTextureFormat_Undefined};
+
         // Pending per-draw state (updated by Set* / Bind* before Draw)
         GraphicsStateDescriptor pendingState {};
         RHIShaderHandle         pendingShaderHandle {};

@@ -29,7 +29,7 @@ namespace OZZ::rendering::webgpu {
     inline WGPUTextureUsage ToWebGPU(TextureUsage usage) {
         WGPUTextureUsage flags = WGPUTextureUsage_None;
         if (static_cast<uint8_t>(usage) & static_cast<uint8_t>(TextureUsage::Sampled))
-            flags |= WGPUTextureUsage_TextureBinding;
+            flags |= WGPUTextureUsage_TextureBinding | WGPUTextureUsage_CopyDst;
         if (static_cast<uint8_t>(usage) & static_cast<uint8_t>(TextureUsage::ColorAttachment))
             flags |= WGPUTextureUsage_RenderAttachment;
         if (static_cast<uint8_t>(usage) & static_cast<uint8_t>(TextureUsage::DepthAttachment))

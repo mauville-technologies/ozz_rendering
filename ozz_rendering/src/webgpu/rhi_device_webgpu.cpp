@@ -293,6 +293,10 @@ namespace OZZ::rendering::webgpu {
                                            const RenderPassDescriptor& rpDesc) {
         if (!activeEncoder) return;
 
+        // Reset active pass formats; they will be set below from the actual attachments.
+        activePassColorFormat = WGPUTextureFormat_Undefined;
+        activePassDepthFormat = WGPUTextureFormat_Undefined;
+
         std::vector<WGPURenderPassColorAttachment> colorAttachments;
         colorAttachments.reserve(rpDesc.ColorAttachmentCount);
 
@@ -300,6 +304,9 @@ namespace OZZ::rendering::webgpu {
             const auto& att = rpDesc.ColorAttachments[i];
             auto* tex = texturePool.Get(att.Texture);
             if (!tex) continue;
+
+            // Capture the first color attachment's format for pipeline key building.
+            if (i == 0) activePassColorFormat = wgpuTextureGetFormat(tex->Texture);
 
             WGPURenderPassColorAttachment ca = {};
             ca.view       = tex->TextureView;
@@ -319,8 +326,19 @@ namespace OZZ::rendering::webgpu {
                 depthAtt.depthLoadOp     = ToWebGPU(rpDesc.DepthAttachment.Load);
                 depthAtt.depthStoreOp    = ToWebGPU(rpDesc.DepthAttachment.Store);
                 depthAtt.depthClearValue = rpDesc.DepthAttachment.Clear.Depth;
-                depthAtt.stencilLoadOp   = WGPULoadOp_Undefined;
-                depthAtt.stencilStoreOp  = WGPUStoreOp_Undefined;
+                // For combined depth+stencil formats (D24S8) the view includes the stencil
+                // aspect, so WebGPU requires either explicit stencil ops or stencilReadOnly=true.
+                // We never use stencil, so mark it read-only to avoid specifying ops.
+                {
+                    WGPUTextureFormat depFmt = wgpuTextureGetFormat(dTex->Texture);
+                    activePassDepthFormat = depFmt;
+                    bool hasStencil = (depFmt == WGPUTextureFormat_Depth24PlusStencil8 ||
+                                       depFmt == WGPUTextureFormat_Depth32FloatStencil8 ||
+                                       depFmt == WGPUTextureFormat_Stencil8);
+                    depthAtt.stencilLoadOp   = WGPULoadOp_Undefined;
+                    depthAtt.stencilStoreOp  = WGPUStoreOp_Undefined;
+                    depthAtt.stencilReadOnly = hasStencil;
+                }
                 depthAttPtr = &depthAtt;
             }
         }
@@ -544,8 +562,8 @@ namespace OZZ::rendering::webgpu {
         PipelineKey key {};
         key.shader         = pendingShaderHandle;
         key.state          = pendingState;
-        key.colorFormat    = swapchainFormat;
-        key.depthFormat    = depthFormat;
+        key.colorFormat    = activePassColorFormat;
+        key.depthFormat    = activePassDepthFormat;
         key.pipelineLayout = pipelineLayout ? *pipelineLayout : nullptr;
 
         WGPURenderPipeline pipeline = pipelineCache.GetOrCreate(key,
@@ -592,8 +610,8 @@ namespace OZZ::rendering::webgpu {
         PipelineKey key {};
         key.shader         = pendingShaderHandle;
         key.state          = pendingState;
-        key.colorFormat    = swapchainFormat;
-        key.depthFormat    = depthFormat;
+        key.colorFormat    = activePassColorFormat;
+        key.depthFormat    = activePassDepthFormat;
         key.pipelineLayout = pipelineLayout ? *pipelineLayout : nullptr;
 
         WGPURenderPipeline pipeline = pipelineCache.GetOrCreate(key,
@@ -736,10 +754,10 @@ namespace OZZ::rendering::webgpu {
         viewDesc.mipLevelCount   = 1;
         viewDesc.baseArrayLayer  = 0;
         viewDesc.arrayLayerCount = 1;
-        // Depth formats need Depth aspect
-        bool isDepth = (descriptor.Format == TextureFormat::D32Float ||
-                        descriptor.Format == TextureFormat::D24S8);
-        viewDesc.aspect = isDepth ? WGPUTextureAspect_DepthOnly : WGPUTextureAspect_All;
+        // Pure depth formats (no stencil) use DepthOnly; combined depth+stencil must use All
+        // because DepthOnly would require a different view format (e.g. Depth24Plus ≠ Depth24PlusStencil8).
+        bool isPureDepth = (descriptor.Format == TextureFormat::D32Float);
+        viewDesc.aspect = isPureDepth ? WGPUTextureAspect_DepthOnly : WGPUTextureAspect_All;
         tex.TextureView = wgpuTextureCreateView(tex.Texture, &viewDesc);
 
         // Sampler (for sampled textures)

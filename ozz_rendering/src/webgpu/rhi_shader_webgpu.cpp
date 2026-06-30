@@ -105,19 +105,6 @@ namespace OZZ::rendering::webgpu {
             }
         }
 
-        // getGlobalConstantBufferBinding: implicit aggregated constant buffer (rare in
-        // explicit-binding shaders). Only add if the set-3 path hasn't already done so.
-        if (result.PushConstantCount == 0) {
-            SlangUInt gcbBinding = layout->getGlobalConstantBufferBinding();
-            if (gcbBinding != SLANG_UNBOUNDED_SIZE && gcbBinding != SLANG_UNKNOWN_SIZE) {
-                result.PushConstants[result.PushConstantCount++] = {
-                    ShaderStageFlags::Vertex | ShaderStageFlags::Fragment,
-                    0,
-                    256,
-                };
-            }
-        }
-
         return result;
     }
 
