@@ -116,6 +116,13 @@ namespace OZZ::rendering::vk {
 
         OZZ_GPU_CONTEXT_DESTROY(tracyGpuContext);
 
+#ifdef OZZ_SLANG_ENABLED
+        if (slangGlobalSession) {
+            slangGlobalSession->release();
+            slangGlobalSession = nullptr;
+        }
+#endif
+
         for (const auto buffer : transientCommandBuffers) {
             vkFreeCommandBuffers(device, transientCommandBufferPool, 1, &buffer);
         }
@@ -342,6 +349,15 @@ namespace OZZ::rendering::vk {
                 vkFreeCommandBuffers(device, commandBufferPool, 1, &tracyCmdBuf);
             }
         }
+
+#ifdef OZZ_SLANG_ENABLED
+        if (SLANG_FAILED(slang::createGlobalSession(&slangGlobalSession))) {
+            spdlog::warn("Failed to create Slang global session; Slang shaders will not be available");
+            slangGlobalSession = nullptr;
+        } else {
+            spdlog::info("Slang global session created");
+        }
+#endif
 
         spdlog::info("Successfully initialized Vulkan RHI device");
         return true;
@@ -1901,7 +1917,11 @@ namespace OZZ::rendering::vk {
 
     RHIShaderHandle RHIDeviceVulkan::CreateShader(ShaderSourceParams&& shaderSources) {
         OZZ_PROFILE_FUNCTION;
+#ifdef OZZ_SLANG_ENABLED
+        RHIShaderVulkan shader {device, std::move(shaderSources), slangGlobalSession};
+#else
         RHIShaderVulkan shader {device, std::move(shaderSources)};
+#endif
         if (!shader.IsCompiled()) {
             spdlog::error("Failed to compile shader. Aborting.");
             return RHIShaderHandle::Null();

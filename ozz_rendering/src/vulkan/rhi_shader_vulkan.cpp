@@ -47,8 +47,15 @@ namespace OZZ::rendering::vk {
                                   });
     }
 
-    RHIShaderVulkan::RHIShaderVulkan(VkDevice device, ShaderSourceParams&& shaderSources) {
+    RHIShaderVulkan::RHIShaderVulkan(VkDevice device, ShaderSourceParams&& shaderSources
+#ifdef OZZ_SLANG_ENABLED
+        , slang::IGlobalSession* inSlangSession
+#endif
+    ) {
         OZZ_PROFILE_FUNCTION;
+#ifdef OZZ_SLANG_ENABLED
+        slangSession = inSlangSession;
+#endif
         bIsValid = compileSources(device, std::move(shaderSources));
     }
 
@@ -72,7 +79,22 @@ namespace OZZ::rendering::vk {
 
     bool RHIShaderVulkan::compileSources(VkDevice device, ShaderSourceParams&& shaderSources) {
         OZZ_PROFILE_FUNCTION;
-        auto compiledOpt = compileProgram(shaderSources);
+        std::optional<CompiledShaderProgram> compiledOpt;
+
+#ifdef OZZ_SLANG_ENABLED
+        if (shaderSources.IsSlang) {
+            if (!slangSession) {
+                spdlog::error("Slang shader requested but no Slang session provided");
+                return false;
+            }
+            bIsSlang = true;
+            compiledOpt = compileProgramSlang(shaderSources);
+        } else
+#endif
+        {
+            compiledOpt = compileProgram(shaderSources);
+        }
+
         if (!compiledOpt.has_value()) {
             spdlog::error("Failed to compile shader program. Aborting process. See logs for details.");
             return false;
@@ -82,7 +104,9 @@ namespace OZZ::rendering::vk {
         bHasGeometry = !shaderSources.Geometry.empty();
         pipelineLayoutDescriptor = ReflectPipelineLayoutDescriptor(compiledProgram);
 
-        glslang::FinalizeProcess();
+        if (!bIsSlang) {
+            glslang::FinalizeProcess();
+        }
         bIsCompiled = true;
         return true;
     }
@@ -95,6 +119,9 @@ namespace OZZ::rendering::vk {
         shaders.clear();
 
         std::vector<VkShaderCreateInfoEXT> createInfos;
+        const char* vertexEntryPoint  = bIsSlang ? "vertexMain"   : "main";
+        const char* fragmentEntryPoint = bIsSlang ? "fragmentMain" : "main";
+
         VkShaderCreateInfoEXT vertexCreateInfo {
             .sType = VK_STRUCTURE_TYPE_SHADER_CREATE_INFO_EXT,
             .pNext = nullptr,
@@ -104,7 +131,7 @@ namespace OZZ::rendering::vk {
             .codeType = VK_SHADER_CODE_TYPE_SPIRV_EXT,
             .codeSize = compiledProgram.VertexSpirv.size() * sizeof(uint32_t),
             .pCode = compiledProgram.VertexSpirv.data(),
-            .pName = "main",
+            .pName = vertexEntryPoint,
             .setLayoutCount = static_cast<uint32_t>(setLayouts.size()),
             .pSetLayouts = setLayouts.data(),
             .pushConstantRangeCount = static_cast<uint32_t>(pushConstantRanges.size()),
@@ -147,7 +174,7 @@ namespace OZZ::rendering::vk {
             .codeType = VK_SHADER_CODE_TYPE_SPIRV_EXT,
             .codeSize = compiledProgram.FragmentSpirv.size() * sizeof(uint32_t),
             .pCode = compiledProgram.FragmentSpirv.data(),
-            .pName = "main",
+            .pName = fragmentEntryPoint,
             .setLayoutCount = static_cast<uint32_t>(setLayouts.size()),
             .pSetLayouts = setLayouts.data(),
             .pushConstantRangeCount = static_cast<uint32_t>(pushConstantRanges.size()),
@@ -267,4 +294,125 @@ namespace OZZ::rendering::vk {
 
         return {true, std::move(shader)};
     }
+
+#ifdef OZZ_SLANG_ENABLED
+    std::optional<CompiledShaderProgram> RHIShaderVulkan::compileProgramSlang(
+        const ShaderSourceParams& shaderSources)
+    {
+        OZZ_PROFILE_FUNCTION;
+
+        std::string combined = shaderSources.Vertex;
+        if (!shaderSources.Fragment.empty() && shaderSources.Fragment != shaderSources.Vertex) {
+            combined += "\n";
+            combined += shaderSources.Fragment;
+        }
+
+        slang::TargetDesc targetDesc = {};
+        targetDesc.format = SLANG_SPIRV;
+
+        slang::SessionDesc sessionDesc = {};
+        sessionDesc.targets     = &targetDesc;
+        sessionDesc.targetCount = 1;
+
+        slang::ISession* session = nullptr;
+        if (SLANG_FAILED(slangSession->createSession(sessionDesc, &session)) || !session) {
+            spdlog::error("Slang: failed to create session for SPIR-V compilation");
+            return std::nullopt;
+        }
+
+        ISlangBlob* diagBlob = nullptr;
+
+        slang::IModule* module = session->loadModuleFromSourceString(
+            "shader", "shader.slang", combined.c_str(), &diagBlob);
+        if (diagBlob) {
+            spdlog::warn("Slang diagnostics:\n{}",
+                static_cast<const char*>(diagBlob->getBufferPointer()));
+            diagBlob->release();
+            diagBlob = nullptr;
+        }
+        if (!module) {
+            spdlog::error("Slang: shader module load failed");
+            session->release();
+            return std::nullopt;
+        }
+
+        slang::IEntryPoint* vertEP = nullptr;
+        slang::IEntryPoint* fragEP = nullptr;
+        module->findAndCheckEntryPoint("vertexMain", SLANG_STAGE_VERTEX, &vertEP, &diagBlob);
+        if (diagBlob) { diagBlob->release(); diagBlob = nullptr; }
+        module->findAndCheckEntryPoint("fragmentMain", SLANG_STAGE_FRAGMENT, &fragEP, &diagBlob);
+        if (diagBlob) { diagBlob->release(); diagBlob = nullptr; }
+
+        if (!vertEP) {
+            spdlog::error("Slang: no 'vertexMain' entry point found");
+            module->release();
+            session->release();
+            return std::nullopt;
+        }
+        if (!fragEP) {
+            spdlog::error("Slang: no 'fragmentMain' entry point found");
+            if (vertEP) vertEP->release();
+            module->release();
+            session->release();
+            return std::nullopt;
+        }
+
+        slang::IComponentType* components[] = { module, vertEP, fragEP };
+        slang::IComponentType* composite = nullptr;
+        session->createCompositeComponentType(components, 3, &composite, &diagBlob);
+        if (diagBlob) { diagBlob->release(); diagBlob = nullptr; }
+
+        slang::IComponentType* linked = nullptr;
+        if (composite) {
+            composite->link(&linked, &diagBlob);
+            if (diagBlob) { diagBlob->release(); diagBlob = nullptr; }
+            composite->release();
+        }
+        if (!linked) {
+            spdlog::error("Slang: shader link failed");
+            vertEP->release();
+            fragEP->release();
+            module->release();
+            session->release();
+            return std::nullopt;
+        }
+
+        auto extractSPIRV = [&](int epIdx) -> std::vector<uint32_t> {
+            ISlangBlob* codeBlob = nullptr;
+            if (SLANG_FAILED(linked->getEntryPointCode(epIdx, 0, &codeBlob, &diagBlob)) || !codeBlob) {
+                if (diagBlob) { diagBlob->release(); diagBlob = nullptr; }
+                return {};
+            }
+            if (diagBlob) { diagBlob->release(); diagBlob = nullptr; }
+            const auto* data = static_cast<const uint32_t*>(codeBlob->getBufferPointer());
+            size_t wordCount = codeBlob->getBufferSize() / sizeof(uint32_t);
+            std::vector<uint32_t> result(data, data + wordCount);
+            codeBlob->release();
+            return result;
+        };
+
+        // Entry points are in order: vertexMain=0, fragmentMain=1
+        CompiledShaderProgram compiled;
+        compiled.VertexSpirv   = extractSPIRV(0);
+        compiled.FragmentSpirv = extractSPIRV(1);
+
+        linked->release();
+        vertEP->release();
+        fragEP->release();
+        module->release();
+        session->release();
+
+        if (compiled.VertexSpirv.empty()) {
+            spdlog::error("Slang: failed to extract vertex SPIR-V");
+            return std::nullopt;
+        }
+        if (compiled.FragmentSpirv.empty()) {
+            spdlog::error("Slang: failed to extract fragment SPIR-V");
+            return std::nullopt;
+        }
+        spdlog::trace("Successfully compiled Slang shader to SPIR-V");
+        return compiled;
+    }
+#endif
+
 } // namespace OZZ::rendering::vk

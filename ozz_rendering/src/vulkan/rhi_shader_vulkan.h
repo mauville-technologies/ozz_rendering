@@ -15,6 +15,10 @@
 #include <spirv_cross/spirv_reflect.hpp>
 #include <volk.h>
 
+#ifdef OZZ_SLANG_ENABLED
+#include <slang.h>
+#endif
+
 namespace OZZ::rendering::vk {
 
     inline EShLanguage ToGLSLANGShaderStage(const ShaderStageFlags stage) {
@@ -34,7 +38,11 @@ namespace OZZ::rendering::vk {
     class RHIShaderVulkan {
     public:
         RHIShaderVulkan(VkDevice device, ShaderFileParams&& shaderFiles);
-        RHIShaderVulkan(VkDevice device, ShaderSourceParams&& shaderSources);
+        RHIShaderVulkan(VkDevice device, ShaderSourceParams&& shaderSources
+#ifdef OZZ_SLANG_ENABLED
+            , slang::IGlobalSession* slangSession = nullptr
+#endif
+        );
 
         void Bind(VkDevice device, VkCommandBuffer commandBuffer) const;
         void Destroy(VkDevice vk_device);
@@ -58,6 +66,9 @@ namespace OZZ::rendering::vk {
         static std::optional<CompiledShaderProgram> compileProgram(const ShaderSourceParams& shaderSources);
         static std::pair<bool, std::unique_ptr<glslang::TShader>> compileShader(ShaderStageFlags stage,
                                                                                 const std::string& glslCode);
+#ifdef OZZ_SLANG_ENABLED
+        std::optional<CompiledShaderProgram> compileProgramSlang(const ShaderSourceParams& shaderSources);
+#endif
 
     private:
         std::vector<VkShaderEXT> shaders {};
@@ -67,8 +78,13 @@ namespace OZZ::rendering::vk {
         bool bHasGeometry {false};
         bool bIsValid {false};
         bool bIsCompiled {false};
+        bool bIsSlang {false};
 
         RHIPipelineLayoutDescriptor pipelineLayoutDescriptor {};
+
+#ifdef OZZ_SLANG_ENABLED
+        slang::IGlobalSession* slangSession {nullptr};
+#endif
     };
 
 } // namespace OZZ::rendering::vk

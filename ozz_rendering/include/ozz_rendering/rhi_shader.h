@@ -23,6 +23,7 @@ namespace OZZ::rendering {
         std::string Vertex;
         std::string Geometry;
         std::string Fragment;
+        bool IsSlang = false;
     };
 
     struct ShaderFileParams {

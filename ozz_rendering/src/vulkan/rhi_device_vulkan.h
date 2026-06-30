@@ -26,6 +26,10 @@
 using TracyVkCtx = void*;
 #endif
 
+#ifdef OZZ_SLANG_ENABLED
+#include <slang.h>
+#endif
+
 namespace OZZ::rendering::vk {
     constexpr uint32_t MaxFramesInFlight = 2;
 
@@ -227,5 +231,9 @@ namespace OZZ::rendering::vk {
 
         // Tracy GPU profiling context
         TracyVkCtx tracyGpuContext {nullptr};
+
+#ifdef OZZ_SLANG_ENABLED
+        slang::IGlobalSession* slangGlobalSession {nullptr};
+#endif
     };
 } // namespace OZZ::rendering::vk
