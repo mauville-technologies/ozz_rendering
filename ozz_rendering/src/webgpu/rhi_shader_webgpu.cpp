@@ -49,6 +49,19 @@ namespace OZZ::rendering::webgpu {
             uint32_t setIndex  = static_cast<uint32_t>(param->getBindingSpace());
             uint32_t bindIndex = static_cast<uint32_t>(param->getBindingIndex());
 
+            // Set 3 is the dedicated push-constant slot; mark it as a push constant
+            // regardless of whether [[vk::push_constant]] or [vk::binding(0,3)] was used.
+            if (setIndex == 3U) {
+                if (result.PushConstantCount == 0) {
+                    result.PushConstants[result.PushConstantCount++] = {
+                        ShaderStageFlags::Vertex | ShaderStageFlags::Fragment,
+                        0,
+                        256,
+                    };
+                }
+                continue;
+            }
+
             if (setIndex >= MaxDescriptorSets) continue;
 
             slang::TypeReflection* type = param->getType();
@@ -139,6 +152,17 @@ namespace OZZ::rendering::webgpu {
             pos += kPushConstReplace.size();
         }
 
+        // Slang: [[vk::push_constant]] does not emit @group/@binding in WGSL output.
+        // Replace with an explicit binding at the dedicated push-constant slot (set=3, binding=0)
+        // so Slang generates valid @group(3) @binding(0) decorations.
+        static const std::string kSlangPCSearch  = "[[vk::push_constant]]";
+        static const std::string kSlangPCReplace = "[vk::binding(0, 3)]";
+        for (size_t pos = 0;
+             (pos = combined.find(kSlangPCSearch, pos)) != std::string::npos; ) {
+            combined.replace(pos, kSlangPCSearch.size(), kSlangPCReplace);
+            pos += kSlangPCReplace.size();
+        }
+
         slang::TargetDesc targetDesc = {};
         targetDesc.format = SLANG_WGSL;
 
@@ -168,18 +192,16 @@ namespace OZZ::rendering::webgpu {
             return false;
         }
 
+        // For Slang shaders both entry points live in params.Vertex (combined source).
+        // Always search for both; Slang returns null non-fatally if one is absent.
         slang::IEntryPoint* vertEP = nullptr;
         slang::IEntryPoint* fragEP = nullptr;
-        if (!params.Vertex.empty()) {
-            module->findAndCheckEntryPoint(
-                vertexEntryPoint.c_str(), SLANG_STAGE_VERTEX, &vertEP, &diagBlob);
-            if (diagBlob) { diagBlob->release(); diagBlob = nullptr; }
-        }
-        if (!params.Fragment.empty()) {
-            module->findAndCheckEntryPoint(
-                fragmentEntryPoint.c_str(), SLANG_STAGE_FRAGMENT, &fragEP, &diagBlob);
-            if (diagBlob) { diagBlob->release(); diagBlob = nullptr; }
-        }
+        module->findAndCheckEntryPoint(
+            vertexEntryPoint.c_str(), SLANG_STAGE_VERTEX, &vertEP, &diagBlob);
+        if (diagBlob) { diagBlob->release(); diagBlob = nullptr; }
+        module->findAndCheckEntryPoint(
+            fragmentEntryPoint.c_str(), SLANG_STAGE_FRAGMENT, &fragEP, &diagBlob);
+        if (diagBlob) { diagBlob->release(); diagBlob = nullptr; }
 
         std::vector<slang::IComponentType*> comps;
         comps.push_back(module);

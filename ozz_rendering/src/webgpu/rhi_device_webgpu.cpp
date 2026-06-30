@@ -845,6 +845,19 @@ namespace OZZ::rendering::webgpu {
             if (bgl) bgls.push_back(*bgl);
         }
 
+        // If the shader uses push constants, extend the layout to include pushConstantBGL
+        // at slot PushConstantSet (3). Fill any gap slots with empty BGLs.
+        if (desc.PushConstantCount > 0 && pushConstantBGL) {
+            while (bgls.size() < PushConstantSet) {
+                const RHIDescriptorSetLayoutDescriptor emptySet {};
+                auto h = CreateDescriptorSetLayout(emptySet);
+                outHandles.insert(h);
+                auto* bgl = bindGroupLayoutPool.Get(h);
+                if (bgl) bgls.push_back(*bgl);
+            }
+            bgls.push_back(pushConstantBGL);
+        }
+
         WGPUPipelineLayoutDescriptor plDesc {};
         plDesc.bindGroupLayouts     = bgls.empty() ? nullptr : bgls.data();
         plDesc.bindGroupLayoutCount = bgls.size();
