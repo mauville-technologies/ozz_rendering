@@ -1624,13 +1624,14 @@ namespace OZZ::rendering::vk {
         }
 
         std::vector<VkWriteDescriptorSet> vkWrites;
-        vkWrites.reserve(writes.size());
+        vkWrites.reserve(writes.size() * 2); // *2 for SampledImage auto-write sampler
 
-        // Storage for descriptor infos (must outlive vkUpdateDescriptorSets)
+        // Storage for descriptor infos (must outlive vkUpdateDescriptorSets).
+        // *2 because SampledImage writes also auto-write a sampler entry at binding+1.
         std::vector<VkDescriptorBufferInfo> bufferInfos;
         bufferInfos.reserve(writes.size());
         std::vector<VkDescriptorImageInfo> imageInfos;
-        imageInfos.reserve(writes.size());
+        imageInfos.reserve(writes.size() * 2);
 
         for (const auto& write : writes) {
             VkWriteDescriptorSet vkWrite {
@@ -1752,7 +1753,10 @@ namespace OZZ::rendering::vk {
                                          &texture.Allocation,
                                          &texture.AllocationInfo);
             result != VK_SUCCESS) {
-            spdlog::error("Failed to create image for texture. Error: {}", static_cast<int>(result));
+            spdlog::error("Failed to create image for texture. Error: {} ({}x{} fmt={})",
+                          static_cast<int>(result),
+                          descriptor.Width, descriptor.Height,
+                          static_cast<int>(descriptor.Format));
             return RHITextureHandle::Null();
         }
 
@@ -2082,24 +2086,26 @@ namespace OZZ::rendering::vk {
     RHIDescriptorSetLayoutHandle
     RHIDeviceVulkan::CreateDescriptorSetLayout(const RHIDescriptorSetLayoutDescriptor& descriptorSetLayoutDescriptor) {
         RHIDescriptorSetLayoutHandle handle {RHIDescriptorSetLayoutHandle::Null()};
-        // build up the bindings
-        std::vector<VkDescriptorSetLayoutBinding> bindings {descriptorSetLayoutDescriptor.BindingCount};
+        // build up the bindings, skipping empty slots (Count == 0)
+        std::vector<VkDescriptorSetLayoutBinding> bindings;
+        bindings.reserve(descriptorSetLayoutDescriptor.BindingCount);
         for (auto i = 0U; i < descriptorSetLayoutDescriptor.BindingCount; i++) {
-            auto& srcBinding = descriptorSetLayoutDescriptor.Bindings[i];
-            bindings[i] = {
+            const auto& srcBinding = descriptorSetLayoutDescriptor.Bindings[i];
+            if (srcBinding.Count == 0) continue;
+            bindings.push_back({
                 .binding = srcBinding.Binding,
                 .descriptorType = ConvertDescriptorTypeToVulkan(srcBinding.Type),
                 .descriptorCount = srcBinding.Count,
                 .stageFlags = ConvertShaderStageFlagsToVulkan(srcBinding.StageFlags),
-                .pImmutableSamplers = nullptr, // TODO: support immutable samplers when needed
-            };
+                .pImmutableSamplers = nullptr,
+            });
         }
         VkDescriptorSetLayoutCreateInfo layoutCreateInfo {
             .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
             .pNext = nullptr,
             .flags = 0,
-            .bindingCount = descriptorSetLayoutDescriptor.BindingCount,
-            .pBindings = bindings.data(),
+            .bindingCount = static_cast<uint32_t>(bindings.size()),
+            .pBindings = bindings.empty() ? nullptr : bindings.data(),
         };
 
         VkDescriptorSetLayout layout;

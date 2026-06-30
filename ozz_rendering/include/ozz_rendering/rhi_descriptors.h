@@ -25,8 +25,9 @@ namespace OZZ::rendering {
     struct RHIDescriptorSetLayoutBinding {
         uint32_t Binding {0};
         DescriptorType Type {DescriptorType::UniformBuffer};
-        uint32_t Count {1}; // array size
+        uint32_t Count {0};         // 0 = empty/unused slot (skip); populated slots have Count >= 1
         ShaderStageFlags StageFlags {};
+        uint32_t OriginalBinding {UINT32_MAX}; // UINT32_MAX = same as Binding (no WebGPU remapping)
     };
 
     struct RHIDescriptorSetLayoutDescriptor {

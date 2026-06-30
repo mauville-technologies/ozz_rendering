@@ -119,8 +119,8 @@ namespace OZZ::rendering::vk {
         shaders.clear();
 
         std::vector<VkShaderCreateInfoEXT> createInfos;
-        const char* vertexEntryPoint  = bIsSlang ? "vertexMain"   : "main";
-        const char* fragmentEntryPoint = bIsSlang ? "fragmentMain" : "main";
+        const char* vertexEntryPoint  = "main";
+        const char* fragmentEntryPoint = "main";
 
         VkShaderCreateInfoEXT vertexCreateInfo {
             .sType = VK_STRUCTURE_TYPE_SHADER_CREATE_INFO_EXT,

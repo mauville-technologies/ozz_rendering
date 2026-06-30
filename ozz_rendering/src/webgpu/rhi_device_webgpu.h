@@ -159,6 +159,9 @@ namespace OZZ::rendering::webgpu {
         WGPUBuffer          pushConstantBuffer {nullptr};
         WGPUBindGroupLayout pushConstantBGL    {nullptr};
         WGPUBindGroup       pushConstantBG     {nullptr};
+        // Empty BGL/BG used to satisfy gap slots in pipeline layouts with push constants
+        WGPUBindGroupLayout emptyBGL           {nullptr};
+        WGPUBindGroup       emptyBG            {nullptr};
         uint8_t             pendingPushConstantData[256] {};
         bool                pendingPushConstantDirty {false};
 

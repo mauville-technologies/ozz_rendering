@@ -60,6 +60,8 @@ namespace OZZ::rendering::webgpu {
         if (activeEncoder)           wgpuCommandEncoderRelease(activeEncoder);
         if (currentBackbufferView)   wgpuTextureViewRelease(currentBackbufferView);
 
+        if (emptyBG)            { wgpuBindGroupRelease(emptyBG);                 emptyBG            = nullptr; }
+        if (emptyBGL)           { wgpuBindGroupLayoutRelease(emptyBGL);          emptyBGL           = nullptr; }
         if (pushConstantBG)     { wgpuBindGroupRelease(pushConstantBG);          pushConstantBG     = nullptr; }
         if (pushConstantBGL)    { wgpuBindGroupLayoutRelease(pushConstantBGL);   pushConstantBGL    = nullptr; }
         if (pushConstantBuffer) { wgpuBufferRelease(pushConstantBuffer);         pushConstantBuffer = nullptr; }
@@ -179,6 +181,20 @@ namespace OZZ::rendering::webgpu {
             pcBGDesc.entryCount = 1;
             pcBGDesc.entries    = &pcBGEntry;
             pushConstantBG = wgpuDeviceCreateBindGroup(device, &pcBGDesc);
+        }
+
+        // Empty BGL and BG — used to satisfy gap set slots in pipeline layouts
+        {
+            WGPUBindGroupLayoutDescriptor emptyBGLDesc {};
+            emptyBGLDesc.entryCount = 0;
+            emptyBGLDesc.entries    = nullptr;
+            emptyBGL = wgpuDeviceCreateBindGroupLayout(device, &emptyBGLDesc);
+
+            WGPUBindGroupDescriptor emptyBGDesc {};
+            emptyBGDesc.layout     = emptyBGL;
+            emptyBGDesc.entryCount = 0;
+            emptyBGDesc.entries    = nullptr;
+            emptyBG = wgpuDeviceCreateBindGroup(device, &emptyBGDesc);
         }
     }
 
@@ -591,6 +607,11 @@ namespace OZZ::rendering::webgpu {
         }
 
         if (pushConstantBG) {
+            // Bind empty groups for gap slots (between last real set and PushConstantSet)
+            for (uint32_t i = 1; i < PushConstantSet; i++) {
+                if (!pendingDescriptorSets[i].IsValid() && emptyBG)
+                    wgpuRenderPassEncoderSetBindGroup(activeRenderPassEncoder, i, emptyBG, 0, nullptr);
+            }
             if (pendingPushConstantDirty) {
                 wgpuQueueWriteBuffer(queue, pushConstantBuffer, 0, pendingPushConstantData, 256);
                 pendingPushConstantDirty = false;
@@ -644,6 +665,11 @@ namespace OZZ::rendering::webgpu {
         }
 
         if (pushConstantBG) {
+            // Bind empty groups for gap slots (between last real set and PushConstantSet)
+            for (uint32_t i = 1; i < PushConstantSet; i++) {
+                if (!pendingDescriptorSets[i].IsValid() && emptyBG)
+                    wgpuRenderPassEncoderSetBindGroup(activeRenderPassEncoder, i, emptyBG, 0, nullptr);
+            }
             if (pendingPushConstantDirty) {
                 wgpuQueueWriteBuffer(queue, pushConstantBuffer, 0, pendingPushConstantData, 256);
                 pendingPushConstantDirty = false;
@@ -897,6 +923,7 @@ namespace OZZ::rendering::webgpu {
 
         for (uint32_t i = 0; i < desc.BindingCount; i++) {
             const auto& b = desc.Bindings[i];
+            if (b.Count == 0) continue; // empty/consumed slot — skip
             WGPUBindGroupLayoutEntry entry {};
             entry.binding    = b.Binding;
             entry.visibility = ToWebGPU(b.StageFlags);
