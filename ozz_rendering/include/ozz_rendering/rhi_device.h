@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "rhi_backend.h"
 #include "rhi_shader.h"
 
 #include <functional>
@@ -24,13 +25,6 @@
 #include <ozz_rendering/rhi_types.h>
 
 namespace OZZ::rendering {
-
-    enum class RHIBackend {
-        Auto,
-        Vulkan,
-        OpenGL,
-        WebGPU,
-    };
 
     struct PlatformContext {
         std::string AppName {"ozz_rendering_app"};

@@ -1,5 +1,7 @@
 #include "rhi_shader_webgpu.h"
 
+#include "utils/push_constants.h"
+
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
@@ -126,7 +128,21 @@ namespace OZZ::rendering::webgpu {
             spvReflectEnumerateDescriptorBindings(&mod, &count, bindings.data());
             for (const auto* b : bindings) {
                 if (!b || b->set >= MaxDescriptorSets) continue;
-                // set=3 binding=0 is the push-constant slot — expose as UniformBuffer
+                // Set PushConstantSet is the reserved push-constant emulation slot
+                // (compileGLSL's patchPC rewrites push_constant blocks to it). Signal it
+                // via PushConstantCount — matching the Slang reflection path — instead of
+                // exposing it as a regular descriptor binding; the device wires up the
+                // actual dynamic-offset bind group layout for that slot.
+                if (b->set == PushConstantSet) {
+                    if (out.PushConstantCount == 0) {
+                        out.PushConstants[out.PushConstantCount++] = {
+                            ShaderStageFlags::Vertex | ShaderStageFlags::Fragment,
+                            0,
+                            PushConstantSlotSize,
+                        };
+                    }
+                    continue;
+                }
                 auto& set = out.Sets[b->set];
                 if (b->set + 1 > out.SetCount) out.SetCount = b->set + 1;
                 DescriptorType dt = DescriptorType::UniformBuffer;
@@ -158,18 +174,16 @@ namespace OZZ::rendering::webgpu {
             }
         }
 
-        // Push constants → remap to set=3, binding=0 in WebGPU
+        // Push constant blocks that survived un-patched (patchPC normally rewrites them
+        // to set=PushConstantSet before compilation) — signal via PushConstantCount too.
         count = 0;
         spvReflectEnumeratePushConstantBlocks(&mod, &count, nullptr);
-        if (count > 0) {
-            auto& set3 = out.Sets[3];
-            if (out.SetCount <= 3) out.SetCount = 4;
-            // Only add binding 0 in set 3 once
-            if (set3.BindingCount == 0) {
-                set3.Bindings[0] = {0, DescriptorType::UniformBuffer, 1,
-                                    ShaderStageFlags::Vertex | ShaderStageFlags::Fragment};
-                set3.BindingCount = 1;
-            }
+        if (count > 0 && out.PushConstantCount == 0) {
+            out.PushConstants[out.PushConstantCount++] = {
+                ShaderStageFlags::Vertex | ShaderStageFlags::Fragment,
+                0,
+                PushConstantSlotSize,
+            };
         }
 
         spvReflectDestroyShaderModule(&mod);
@@ -341,14 +355,15 @@ namespace OZZ::rendering::webgpu {
             uint32_t setIndex  = static_cast<uint32_t>(param->getBindingSpace());
             uint32_t bindIndex = static_cast<uint32_t>(param->getBindingIndex());
 
-            // Set 3 is the dedicated push-constant slot; mark it as a push constant
-            // regardless of whether [[vk::push_constant]] or [vk::binding(0,3)] was used.
-            if (setIndex == 3U) {
+            // Set PushConstantSet is the dedicated push-constant slot; mark it as a push
+            // constant regardless of whether [[vk::push_constant]] or [vk::binding(0,3)]
+            // was used.
+            if (setIndex == PushConstantSet) {
                 if (result.PushConstantCount == 0) {
                     result.PushConstants[result.PushConstantCount++] = {
                         ShaderStageFlags::Vertex | ShaderStageFlags::Fragment,
                         0,
-                        256,
+                        PushConstantSlotSize,
                     };
                 }
                 continue;
@@ -420,11 +435,16 @@ namespace OZZ::rendering::webgpu {
         // WebGPU has no native push constants; rebind push_constant block to set=3, binding=0.
         auto patchPC = [](std::string src) {
             static const std::string kSearch  = "layout(push_constant) uniform";
+            // keep in sync with PushConstantSet / PushConstantBinding (utils/push_constants.h)
             static const std::string kReplace = "layout(set = 3, binding = 0) uniform";
             for (size_t pos = 0; (pos = src.find(kSearch, pos)) != std::string::npos; )
                 src.replace(pos, kSearch.size(), kReplace), pos += kReplace.size();
             return src;
         };
+
+        // WebGPU has no geometry shader stage — a provided geometry source is ignored.
+        if (!params.Geometry.empty())
+            spdlog::warn("WebGPU: geometry shader source provided but ignored (WebGPU has no geometry stage)");
 
         glslang::InitializeProcess();
 
@@ -465,12 +485,14 @@ namespace OZZ::rendering::webgpu {
     bool RHIShaderWebGPU::compile(WGPUDevice device,
                                    slang::IGlobalSession* globalSession,
                                    ShaderSourceParams&& params) {
-        if (!params.IsSlang) {
+        if (params.Slang.empty() && !params.IsSlang) {
             return compileGLSL(device, std::move(params));
         }
 
-        std::string combined = params.Vertex;
-        if (!params.Fragment.empty() && params.Fragment != params.Vertex) {
+        // Prefer the dedicated Slang field; fall back to the legacy IsSlang+Vertex path.
+        const std::string& slangSrc = !params.Slang.empty() ? params.Slang : params.Vertex;
+        std::string combined = slangSrc;
+        if (!params.Fragment.empty() && params.Fragment != slangSrc) {
             combined += "\n";
             combined += params.Fragment;
         }
@@ -479,6 +501,7 @@ namespace OZZ::rendering::webgpu {
         // Replace with an explicit binding at the dedicated push-constant slot (set=3, binding=0)
         // so Slang generates valid @group(3) @binding(0) decorations.
         static const std::string kSlangPCSearch  = "[[vk::push_constant]]";
+        // keep in sync with PushConstantBinding / PushConstantSet (utils/push_constants.h)
         static const std::string kSlangPCReplace = "[vk::binding(0, 3)]";
         for (size_t pos = 0;
              (pos = combined.find(kSlangPCSearch, pos)) != std::string::npos; ) {
@@ -588,7 +611,10 @@ namespace OZZ::rendering::webgpu {
         module->release();
         // Slang 2026.8.1 bug: session->release() triggers "free(): corrupted unsorted
         // chunks" for shaders that generate std140 matrix wrapper types in WGSL.
-        // Keep the session alive; the OS reclaims memory at program exit.
+        // Keep the session alive; the OS reclaims memory at program exit. Note this
+        // leaks one ISession per shader for the lifetime of the process.
+        // TODO(slang>2026.8.1): re-test session->release(); currently crashes / corrupts
+        // heap in 2026.8.1.
         slangCompileSession = session;
 
         return vertexModule != nullptr;

@@ -53,6 +53,7 @@ namespace OZZ::rendering::webgpu {
         switch (w) {
             case TextureWrap::Repeat:        return WGPUAddressMode_Repeat;
             case TextureWrap::ClampToEdge:   return WGPUAddressMode_ClampToEdge;
+            // Approximation: WebGPU has no ClampToBorder; ClampToEdge clamps to the edge texel instead of a border color.
             case TextureWrap::ClampToBorder: return WGPUAddressMode_ClampToEdge;
         }
         return WGPUAddressMode_Repeat;
@@ -102,6 +103,7 @@ namespace OZZ::rendering::webgpu {
             case CullMode::None:         return WGPUCullMode_None;
             case CullMode::Front:        return WGPUCullMode_Front;
             case CullMode::Back:         return WGPUCullMode_Back;
+            // Approximation that INVERTS intent: WebGPU cannot cull both faces, so this draws everything instead of culling everything.
             case CullMode::FrontAndBack: return WGPUCullMode_None;
         }
         return WGPUCullMode_None;
@@ -205,6 +207,7 @@ namespace OZZ::rendering::webgpu {
         switch (op) {
             case LoadOp::Load:     return WGPULoadOp_Load;
             case LoadOp::Clear:    return WGPULoadOp_Clear;
+            // Approximation: WebGPU has no DontCare load op; Clear is the closest (attachment contents are discarded either way).
             case LoadOp::DontCare: return WGPULoadOp_Clear;
         }
         return WGPULoadOp_Clear;

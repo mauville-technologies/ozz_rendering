@@ -23,6 +23,10 @@ namespace OZZ::rendering {
         std::string Vertex;
         std::string Geometry;
         std::string Fragment;
+        // Complete Slang module source (vertex+fragment entry points); when non-empty,
+        // takes precedence and IsSlang/Vertex are ignored.
+        std::string Slang;
+        // Legacy: set true to treat Vertex (+Fragment) as Slang source. Prefer `Slang`.
         bool IsSlang = false;
     };
 

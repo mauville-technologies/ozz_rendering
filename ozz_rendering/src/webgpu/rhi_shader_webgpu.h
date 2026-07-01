@@ -27,9 +27,9 @@ namespace OZZ::rendering::webgpu {
         WGPUShaderModule vertexModule   {nullptr};
         WGPUShaderModule fragmentModule {nullptr};
 
-        // Slang session held alive to avoid triggering a Slang 2026.8.1 heap corruption
-        // on session->release() for shaders with std140 matrix types targeting WGSL.
-        // Released in Destroy() — at program shutdown the OS reclaims the memory.
+        // Slang 2026.8.1 bug: session->release() triggers heap corruption for shaders
+        // with std140 matrix types targeting WGSL. Hold the compile session alive;
+        // OS reclaims at program exit.
         slang::ISession* slangCompileSession {nullptr};
 
         RHIPipelineLayoutDescriptor pipelineLayoutDescriptor {};

@@ -82,7 +82,7 @@ namespace OZZ::rendering::vk {
         std::optional<CompiledShaderProgram> compiledOpt;
 
 #ifdef OZZ_SLANG_ENABLED
-        if (shaderSources.IsSlang) {
+        if (!shaderSources.Slang.empty() || shaderSources.IsSlang) {
             if (!slangSession) {
                 spdlog::error("Slang shader requested but no Slang session provided");
                 return false;
@@ -301,8 +301,10 @@ namespace OZZ::rendering::vk {
     {
         OZZ_PROFILE_FUNCTION;
 
-        std::string combined = shaderSources.Vertex;
-        if (!shaderSources.Fragment.empty() && shaderSources.Fragment != shaderSources.Vertex) {
+        // Prefer the dedicated Slang field; fall back to the legacy IsSlang+Vertex path.
+        const std::string& slangSrc = !shaderSources.Slang.empty() ? shaderSources.Slang : shaderSources.Vertex;
+        std::string combined = slangSrc;
+        if (!shaderSources.Fragment.empty() && shaderSources.Fragment != slangSrc) {
             combined += "\n";
             combined += shaderSources.Fragment;
         }
@@ -404,6 +406,11 @@ namespace OZZ::rendering::vk {
         vertEP->release();
         fragEP->release();
         module->release();
+        // Slang 2026.8.1 bug: session->release() triggers heap corruption for some
+        // shaders. Hold the compile session alive; OS reclaims at program exit. Note
+        // this leaks one ISession per shader for the lifetime of the process.
+        // TODO(slang>2026.8.1): re-test session->release(); currently crashes / corrupts
+        // heap in 2026.8.1.
         slangCompileSession = session;
 
         if (compiled.VertexSpirv.empty()) {

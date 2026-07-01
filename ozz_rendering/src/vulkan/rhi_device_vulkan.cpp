@@ -1643,7 +1643,8 @@ namespace OZZ::rendering::vk {
                 .descriptorType = ConvertDescriptorTypeToVulkan(write.Type),
             };
 
-            if (write.Type == DescriptorType::UniformBuffer || write.Type == DescriptorType::StorageBuffer) {
+            if (write.Type == DescriptorType::UniformBuffer || write.Type == DescriptorType::StorageBuffer ||
+                write.Type == DescriptorType::ReadOnlyStorageBuffer) {
                 const auto* buffers = bufferResourcePool.Get(write.Buffer.Buffer);
                 if (!buffers) {
                     spdlog::error("UpdateDescriptorSet: invalid buffer handle at binding {}", write.Binding);

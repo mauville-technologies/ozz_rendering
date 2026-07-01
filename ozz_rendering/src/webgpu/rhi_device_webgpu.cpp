@@ -413,13 +413,12 @@ namespace OZZ::rendering::webgpu {
     // Barriers — no-ops in WebGPU (implicit synchronization)
     // -------------------------------------------------------------------------
 
+    // Barriers are no-ops in WebGPU — synchronization is implicit.
     void RHIDeviceWebGPU::TextureResourceBarrier(const RHIFrameContext&,
-                                                  const TextureBarrierDescriptor&) {
-        std::lock_guard<std::recursive_mutex> lock(apiMutex);}
+                                                  const TextureBarrierDescriptor&) {}
 
     void RHIDeviceWebGPU::BufferMemoryBarrier(const RHIFrameContext&,
-                                               const BufferBarrierDescriptor&) {
-        std::lock_guard<std::recursive_mutex> lock(apiMutex);}
+                                               const BufferBarrierDescriptor&) {}
 
     // -------------------------------------------------------------------------
     // State recording
@@ -617,13 +616,10 @@ namespace OZZ::rendering::webgpu {
     // Draw calls
     // -------------------------------------------------------------------------
 
-    void RHIDeviceWebGPU::Draw(const RHIFrameContext&,
-                                uint32_t vertexCount, uint32_t instanceCount,
-                                uint32_t firstVertex, uint32_t firstInstance) {
-        std::lock_guard<std::recursive_mutex> lock(apiMutex);
-        if (!activeRenderPassEncoder) return;
+    bool RHIDeviceWebGPU::flushPendingDrawState() {
+        if (!activeRenderPassEncoder) return false;
         auto* shader = shaderPool.Get(pendingShaderHandle);
-        if (!shader) return;
+        if (!shader) return false;
 
         auto* pipelineLayout = pipelineLayoutPool.Get(shader->pipelineLayoutHandle);
 
@@ -638,7 +634,7 @@ namespace OZZ::rendering::webgpu {
             [&](const PipelineKey& k) { return buildPipeline(k, *shader); });
         if (!pipeline) {
             spdlog::error("WebGPU: pipeline build failed for shaderHandle.Id={}", pendingShaderHandle.Id);
-            return;
+            return false;
         }
 
         wgpuRenderPassEncoderSetPipeline(activeRenderPassEncoder, pipeline);
@@ -655,28 +651,35 @@ namespace OZZ::rendering::webgpu {
                 wgpuRenderPassEncoderSetBindGroup(activeRenderPassEncoder, i, ds->bindGroup, 0, nullptr);
         }
 
-        // Only bind group 3 if THIS shader's pipeline layout actually declared one.
-        // The GLSL and Slang reflection paths signal "has push constants" two different,
-        // incompatible ways: GLSL (rhi_shader_webgpu.cpp reflectSPIRVStage) sets
-        // SetCount=4 and populates Sets[3] directly, leaving PushConstantCount at 0;
-        // Slang (reflectLayout) sets PushConstantCount>0 but never extends SetCount to
-        // cover set 3. Checking only one of these misses the other reflection path's
-        // shaders entirely, and unconditionally binding group 3 (the old behavior)
+        // Only bind group PushConstantSet if THIS shader's pipeline layout actually
+        // declared push constants (both reflection paths signal this via
+        // PushConstantCount). Unconditionally binding group 3 (the old behavior)
         // mismatches shaders that truly have no push constant at all, e.g. hex.vert/frag —
         // WebGPU then rejects the whole command buffer ("does not match layout... at
         // group index 3" or "no bind group set at group index 1" once the resulting gap
         // in set numbering is also skipped).
-        const bool hasPushConstants = shader->pipelineLayoutDescriptor.PushConstantCount > 0 ||
-                                       shader->pipelineLayoutDescriptor.SetCount > PushConstantSet;
+        const bool hasPushConstants = shader->pipelineLayoutDescriptor.PushConstantCount > 0;
         if (pushConstantBG && hasPushConstants) {
             // Bind empty groups for gap slots (between last real set and PushConstantSet)
             for (uint32_t i = 1; i < PushConstantSet; i++) {
                 if (!pendingDescriptorSets[i].IsValid() && emptyBG)
                     wgpuRenderPassEncoderSetBindGroup(activeRenderPassEncoder, i, emptyBG, 0, nullptr);
             }
+            // pendingPushConstantOffset is sticky: a draw whose shader declares push
+            // constants but never called SetPushConstants this frame reuses the previous
+            // draw's slot — intentional, matching Vulkan push-constant stickiness.
             wgpuRenderPassEncoderSetBindGroup(activeRenderPassEncoder, PushConstantSet,
                                               pushConstantBG, 1, &pendingPushConstantOffset);
         }
+
+        return true;
+    }
+
+    void RHIDeviceWebGPU::Draw(const RHIFrameContext&,
+                                uint32_t vertexCount, uint32_t instanceCount,
+                                uint32_t firstVertex, uint32_t firstInstance) {
+        std::lock_guard<std::recursive_mutex> lock(apiMutex);
+        if (!flushPendingDrawState()) return;
 
         wgpuRenderPassEncoderDraw(activeRenderPassEncoder, vertexCount, instanceCount,
                                    firstVertex, firstInstance);
@@ -687,66 +690,12 @@ namespace OZZ::rendering::webgpu {
                                        uint32_t firstIndex, int32_t vertexOffset,
                                        uint32_t firstInstance) {
         std::lock_guard<std::recursive_mutex> lock(apiMutex);
-        if (!activeRenderPassEncoder) return;
-        auto* shader = shaderPool.Get(pendingShaderHandle);
-        if (!shader) return;
+        if (!flushPendingDrawState()) return;
 
-        auto* pipelineLayout = pipelineLayoutPool.Get(shader->pipelineLayoutHandle);
-
-        PipelineKey key {};
-        key.shader         = pendingShaderHandle;
-        key.state          = pendingState;
-        key.colorFormat    = activePassColorFormat;
-        key.depthFormat    = activePassDepthFormat;
-        key.pipelineLayout = pipelineLayout ? *pipelineLayout : nullptr;
-
-        WGPURenderPipeline pipeline = pipelineCache.GetOrCreate(key,
-            [&](const PipelineKey& k) { return buildPipeline(k, *shader); });
-        if (!pipeline) {
-            spdlog::error("WebGPU: pipeline build failed for shaderHandle.Id={}", pendingShaderHandle.Id);
-            return;
-        }
-
-        wgpuRenderPassEncoderSetPipeline(activeRenderPassEncoder, pipeline);
-
-        if (pendingVertexBuffer.IsValid()) {
-            auto* vb = bufferPool.Get(pendingVertexBuffer);
-            if (vb) wgpuRenderPassEncoderSetVertexBuffer(activeRenderPassEncoder, 0, vb->Buffer, 0, vb->Size);
-        }
         if (hasPendingIndexBuffer && pendingIndexBuffer.IsValid()) {
             auto* ib = bufferPool.Get(pendingIndexBuffer);
             if (ib) wgpuRenderPassEncoderSetIndexBuffer(activeRenderPassEncoder, ib->Buffer,
                                                          WGPUIndexFormat_Uint32, 0, ib->Size);
-        }
-
-        for (uint32_t i = 0; i < MaxBoundDescriptorSets; i++) {
-            if (!pendingDescriptorSets[i].IsValid()) continue;
-            auto* ds = descriptorSetPool.Get(pendingDescriptorSets[i]);
-            if (ds && ds->bindGroup)
-                wgpuRenderPassEncoderSetBindGroup(activeRenderPassEncoder, i, ds->bindGroup, 0, nullptr);
-        }
-
-        // Only bind group 3 if THIS shader's pipeline layout actually declared one.
-        // The GLSL and Slang reflection paths signal "has push constants" two different,
-        // incompatible ways: GLSL (rhi_shader_webgpu.cpp reflectSPIRVStage) sets
-        // SetCount=4 and populates Sets[3] directly, leaving PushConstantCount at 0;
-        // Slang (reflectLayout) sets PushConstantCount>0 but never extends SetCount to
-        // cover set 3. Checking only one of these misses the other reflection path's
-        // shaders entirely, and unconditionally binding group 3 (the old behavior)
-        // mismatches shaders that truly have no push constant at all, e.g. hex.vert/frag —
-        // WebGPU then rejects the whole command buffer ("does not match layout... at
-        // group index 3" or "no bind group set at group index 1" once the resulting gap
-        // in set numbering is also skipped).
-        const bool hasPushConstants = shader->pipelineLayoutDescriptor.PushConstantCount > 0 ||
-                                       shader->pipelineLayoutDescriptor.SetCount > PushConstantSet;
-        if (pushConstantBG && hasPushConstants) {
-            // Bind empty groups for gap slots (between last real set and PushConstantSet)
-            for (uint32_t i = 1; i < PushConstantSet; i++) {
-                if (!pendingDescriptorSets[i].IsValid() && emptyBG)
-                    wgpuRenderPassEncoderSetBindGroup(activeRenderPassEncoder, i, emptyBG, 0, nullptr);
-            }
-            wgpuRenderPassEncoderSetBindGroup(activeRenderPassEncoder, PushConstantSet,
-                                              pushConstantBG, 1, &pendingPushConstantOffset);
         }
 
         wgpuRenderPassEncoderDrawIndexed(activeRenderPassEncoder, indexCount, instanceCount,
@@ -974,13 +923,11 @@ namespace OZZ::rendering::webgpu {
         std::vector<WGPUBindGroupLayout> bgls;
         std::set<RHIDescriptorSetLayoutHandle> outHandles;
 
-        // Slot PushConstantSet (3) is always special-cased below via pushConstantBGL —
-        // never build it here via the generic path. The GLSL reflection path
-        // (reflectSPIRVStage) populates desc.Sets[3] directly with a plain
-        // UniformBuffer-typed binding (SetCount==4), which CreateDescriptorSetLayout would
-        // turn into a NON-dynamic-offset layout — incompatible with the dynamic-offset
-        // pushConstantBG the draw calls actually bind there, causing WebGPU to reject the
-        // pipeline ("does not match layout... at group index 3").
+        // Slot PushConstantSet (3) is reserved for push-constant emulation and is always
+        // special-cased below via pushConstantBGL — never build it here via the generic
+        // path. A layout built here would be NON-dynamic-offset — incompatible with the
+        // dynamic-offset pushConstantBG the draw calls actually bind there, causing WebGPU
+        // to reject the pipeline ("does not match layout... at group index 3").
         for (uint32_t i = 0; i < desc.SetCount && i < PushConstantSet; i++) {
             RHIDescriptorSetLayoutHandle h = CreateDescriptorSetLayout(desc.Sets[i]);
             outHandles.insert(h);
@@ -988,10 +935,9 @@ namespace OZZ::rendering::webgpu {
             if (bgl) bgls.push_back(*bgl);
         }
 
-        // The GLSL and Slang reflection paths signal "this shader has push constants" two
-        // different, incompatible ways — see the Draw/DrawIndexed comment for details.
-        // Check both so shaders from either path get slot 3 wired up correctly.
-        const bool hasPushConstants = desc.PushConstantCount > 0 || desc.SetCount > PushConstantSet;
+        // Both reflection paths (GLSL and Slang) signal push constants via
+        // PushConstantCount; wire up slot PushConstantSet for the emulation buffer.
+        const bool hasPushConstants = desc.PushConstantCount > 0;
         if (hasPushConstants && pushConstantBGL) {
             while (bgls.size() < PushConstantSet) {
                 const RHIDescriptorSetLayoutDescriptor emptySet {};
@@ -1064,6 +1010,9 @@ namespace OZZ::rendering::webgpu {
                     continue;
                 }
                 case DescriptorType::StorageImage:
+                    // Stub: valid only for RGBA8Unorm write-only storage images. The RHI
+                    // descriptor carries no format/access info yet — it will need to be
+                    // plumbed through when a storage image is first used otherwise.
                     entry.storageTexture.access        = WGPUStorageTextureAccess_WriteOnly;
                     entry.storageTexture.format        = WGPUTextureFormat_RGBA8Unorm;
                     entry.storageTexture.viewDimension = WGPUTextureViewDimension_2D;

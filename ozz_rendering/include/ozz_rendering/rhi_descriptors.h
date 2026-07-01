@@ -20,16 +20,15 @@ namespace OZZ::rendering {
         SampledImage,
         Sampler,
         StorageImage,
-        // A texture binding known (by naming convention, see patchGLSLSamplers's depth
-        // detection) to be a depth-format texture. WebGPU requires depth-format textures
-        // to be declared with sampleType Depth/UnfilterableFloat (not Float) and sampled
-        // with a NonFiltering sampler — unlike Vulkan, which samples them like any other
-        // combined image sampler. Vulkan backends treat this identically to
-        // CombinedImageSampler.
+        // A texture binding known to sample a depth-format texture. Depth textures need
+        // a non-filtering sample type on some backends (WebGPU declares them
+        // UnfilterableFloat and pairs them with a NonFiltering sampler) — unlike Vulkan,
+        // which samples them like any other combined image sampler. Vulkan backends
+        // treat this identically to CombinedImageSampler.
         DepthSampledImage,
-        // A GLSL `readonly buffer` SSBO. WebGPU disallows a read-write storage buffer
-        // (WGPUBufferBindingType_Storage) from being visible to the vertex stage at all —
-        // it must be declared WGPUBufferBindingType_ReadOnlyStorage. Vulkan has no such
+        // A read-only storage buffer (e.g. GLSL `readonly buffer`). Some backends
+        // (WebGPU) disallow a read-write storage buffer from being visible to the vertex
+        // stage at all — it must be declared read-only storage. Vulkan has no such
         // restriction and treats this identically to StorageBuffer.
         ReadOnlyStorageBuffer,
     };
@@ -39,7 +38,8 @@ namespace OZZ::rendering {
         DescriptorType Type {DescriptorType::UniformBuffer};
         uint32_t Count {0};         // 0 = empty/unused slot (skip); populated slots have Count >= 1
         ShaderStageFlags StageFlags {};
-        uint32_t OriginalBinding {UINT32_MAX}; // UINT32_MAX = same as Binding (no WebGPU remapping)
+        // Binding index before backend remapping; UINT32_MAX if never remapped (same as Binding).
+        uint32_t OriginalBinding {UINT32_MAX};
     };
 
     struct RHIDescriptorSetLayoutDescriptor {

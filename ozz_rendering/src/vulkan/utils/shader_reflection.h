@@ -91,10 +91,21 @@ namespace OZZ::rendering::vk {
                         // Seen in another stage — merge stage flags
                         it->second.StageFlags = it->second.StageFlags | stage;
                     } else {
+                        DescriptorType descType = ConvertSpvDescriptorType(b->descriptor_type);
+                        // Match the WebGPU reflector: a `readonly buffer` SSBO (NON_WRITABLE
+                        // decoration) is reported as ReadOnlyStorageBuffer so reflected
+                        // layouts are identical across backends. Vulkan folds it back to
+                        // VK_DESCRIPTOR_TYPE_STORAGE_BUFFER (see ConvertDescriptorTypeToVulkan).
+                        if (b->descriptor_type == SPV_REFLECT_DESCRIPTOR_TYPE_STORAGE_BUFFER) {
+                            bool isReadOnly = (b->decoration_flags & SPV_REFLECT_DECORATION_NON_WRITABLE) ||
+                                              (b->block.decoration_flags & SPV_REFLECT_DECORATION_NON_WRITABLE);
+                            if (isReadOnly)
+                                descType = DescriptorType::ReadOnlyStorageBuffer;
+                        }
                         outBindings[key] = MergedBinding {
                             .Set = b->set,
                             .Binding = b->binding,
-                            .Type = ConvertSpvDescriptorType(b->descriptor_type),
+                            .Type = descType,
                             .Count = b->count,
                             .StageFlags = stage,
                         };

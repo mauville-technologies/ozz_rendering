@@ -4,12 +4,16 @@
 #include <ozz_rendering/rhi_pipeline_state.h>
 
 #include <cstring>
+#include <type_traits>
 #include <unordered_map>
 #include <webgpu/webgpu.h>
 
 namespace OZZ::rendering::webgpu {
 
     // Identifies a unique compiled pipeline state. All fields participate in equality.
+    // Equality and hashing are byte-wise (memcmp / byte hash), which is only safe when
+    // every instance is zero-initialized before its fields are filled — always declare
+    // keys as `PipelineKey key {};` so padding bytes compare equal.
     struct PipelineKey {
         RHIShaderHandle shader {};
         GraphicsStateDescriptor state {};
@@ -21,6 +25,8 @@ namespace OZZ::rendering::webgpu {
             return std::memcmp(this, &o, sizeof(PipelineKey)) == 0;
         }
     };
+    static_assert(std::is_trivially_copyable_v<PipelineKey>,
+                  "PipelineKey is compared/hashed via raw bytes and must stay trivially copyable");
 
     struct PipelineKeyHash {
         size_t operator()(const PipelineKey& key) const {

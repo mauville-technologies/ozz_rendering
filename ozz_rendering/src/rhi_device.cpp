@@ -11,16 +11,19 @@
 #include "webgpu/rhi_device_webgpu.h"
 #endif
 
-std::unique_ptr<OZZ::rendering::RHIDevice> OZZ::rendering::CreateRHIDevice(const RHIInitParams& params) {
-    if (params.Backend == RHIBackend::Auto) {
-#if defined(__linux__) || defined(_WIN32)
-        return std::make_unique<vk::RHIDeviceVulkan>(params.Context);
-#else
-        throw std::runtime_error("Only vulkan is currently supported");
-#endif
+OZZ::rendering::RHIBackend OZZ::rendering::ResolveBackend(RHIBackend preferred) {
+    if (preferred != RHIBackend::Auto) {
+        return preferred;
     }
+#if defined(__linux__) || defined(_WIN32)
+    return RHIBackend::Vulkan;
+#else
+    throw std::runtime_error("Only vulkan is currently supported");
+#endif
+}
 
-    switch (params.Backend) {
+std::unique_ptr<OZZ::rendering::RHIDevice> OZZ::rendering::CreateRHIDevice(const RHIInitParams& params) {
+    switch (ResolveBackend(params.Backend)) {
         case RHIBackend::Vulkan:
             return std::make_unique<vk::RHIDeviceVulkan>(params.Context);
         case RHIBackend::WebGPU:
