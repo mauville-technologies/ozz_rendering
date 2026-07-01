@@ -1,6 +1,7 @@
 #include "rhi_shader_webgpu.h"
 
 #include <algorithm>
+#include <cctype>
 #include <filesystem>
 #include <fstream>
 #include <map>
@@ -135,10 +136,24 @@ namespace OZZ::rendering::webgpu {
                     dt = DescriptorType::SampledImage;
                 else if (b->descriptor_type == SPV_REFLECT_DESCRIPTOR_TYPE_SAMPLER)
                     dt = DescriptorType::Sampler;
-                else if (b->descriptor_type == SPV_REFLECT_DESCRIPTOR_TYPE_STORAGE_BUFFER)
-                    dt = DescriptorType::StorageBuffer;
+                else if (b->descriptor_type == SPV_REFLECT_DESCRIPTOR_TYPE_STORAGE_BUFFER) {
+                    bool isReadOnly = (b->decoration_flags & SPV_REFLECT_DECORATION_NON_WRITABLE) ||
+                                      (b->block.decoration_flags & SPV_REFLECT_DECORATION_NON_WRITABLE);
+                    dt = isReadOnly ? DescriptorType::ReadOnlyStorageBuffer : DescriptorType::StorageBuffer;
+                }
                 if (b->binding >= MaxBoundDescriptorSets) continue;
-                set.Bindings[b->binding] = {b->binding, dt, b->count, stage};
+                // reflectSPIRVStage is called once per stage (vertex, then fragment). A
+                // binding shared across both stages (e.g. hex.vert/hex.frag's QuadSSBO at
+                // binding 1) must have its StageFlags be the UNION of every stage that
+                // touches it — overwriting here would drop the earlier stage's visibility
+                // and WebGPU rejects the pipeline ("entry point's stage is not in the
+                // binding visibility in the layout") the moment the dropped stage samples it.
+                auto& existing = set.Bindings[b->binding];
+                if (existing.Count > 0) {
+                    existing.StageFlags = existing.StageFlags | stage;
+                } else {
+                    existing = {b->binding, dt, b->count, stage};
+                }
                 if (b->binding + 1 > set.BindingCount) set.BindingCount = b->binding + 1;
             }
         }
@@ -180,7 +195,18 @@ namespace OZZ::rendering::webgpu {
         uint32_t newTextureBinding; // interleaved binding for texture2D
         uint32_t samplerBinding;    // = newTextureBinding + 1
         uint32_t setIndex;          // set the sampler2D was in (usually 0)
+        bool isDepth {false};       // name contains "depth" — see patchGLSLSamplers
     };
+
+    // GLSL has no first-class "this sampler reads a depth attachment" declaration, so we
+    // fall back to a naming convention (e.g. sceneDepthTexture, overlayDepthTexture) to
+    // decide whether a binding needs WebGPU's stricter depth-texture sample type.
+    static bool NameLooksLikeDepthTexture(const std::string& name) {
+        std::string lower = name;
+        std::transform(lower.begin(), lower.end(), lower.begin(),
+                       [](unsigned char c) { return std::tolower(c); });
+        return lower.find("depth") != std::string::npos;
+    }
 
     static std::string updateBindingInLayout(const std::string& layoutSpec, uint32_t newBinding) {
         auto pos = layoutSpec.find("binding");
@@ -237,7 +263,8 @@ namespace OZZ::rendering::webgpu {
         uint32_t B_start = decls[0].binding;
         for (size_t i = 0; i < decls.size(); i++) {
             uint32_t newTex = B_start + static_cast<uint32_t>(i) * 2;
-            patches.push_back({decls[i].name, decls[i].binding, newTex, newTex + 1, decls[i].setIndex});
+            patches.push_back({decls[i].name, decls[i].binding, newTex, newTex + 1, decls[i].setIndex,
+                               NameLooksLikeDepthTexture(decls[i].name)});
         }
 
         // Map original binding → patch index for later lookup.
@@ -259,12 +286,14 @@ namespace OZZ::rendering::webgpu {
             result.replace(d.pos, d.len, replacement);
         }
 
-        // Rewrite texture/textureSize/texelFetch calls: sampler2D constructor is needed
-        // for all texture builtins when the type is texture2D (not a combined sampler2D).
+        // Rewrite texture/textureLod/textureSize/texelFetch calls: sampler2D constructor is
+        // needed for all texture builtins when the type is texture2D (not a combined sampler2D).
         for (const auto& p : patches) {
             auto combined = "sampler2D(" + p.name + ", " + p.name + "_sampler)";
             std::regex texCallRe("texture\\s*\\(\\s*" + p.name + "\\s*,");
             result = std::regex_replace(result, texCallRe, "texture(" + combined + ",");
+            std::regex texLodRe("textureLod\\s*\\(\\s*" + p.name + "\\s*,");
+            result = std::regex_replace(result, texLodRe, "textureLod(" + combined + ",");
             std::regex texSizeRe("textureSize\\s*\\(\\s*" + p.name + "\\s*,");
             result = std::regex_replace(result, texSizeRe, "textureSize(" + combined + ",");
             std::regex texFetchRe("texelFetch\\s*\\(\\s*" + p.name + "\\s*,");
@@ -291,7 +320,8 @@ namespace OZZ::rendering::webgpu {
 
             if (texEntry.Count == 0 || sampEntry.Count == 0) continue;
 
-            texEntry.Type           = DescriptorType::CombinedImageSampler;
+            texEntry.Type           = p.isDepth ? DescriptorType::DepthSampledImage
+                                                 : DescriptorType::CombinedImageSampler;
             texEntry.OriginalBinding = p.originalBinding;
             sampEntry.Count          = 0; // consumed — CreateDescriptorSetLayout will skip this slot
         }
@@ -462,6 +492,10 @@ namespace OZZ::rendering::webgpu {
         slang::SessionDesc sessionDesc = {};
         sessionDesc.targets     = &targetDesc;
         sessionDesc.targetCount = 1;
+        // GLM (used for all matrices uploaded via UBO/push-constant) is column-major;
+        // Slang defaults to row-major, which silently transposes every matrix read in
+        // shader code (e.g. camera.proj/view, pc.model) unless overridden here.
+        sessionDesc.defaultMatrixLayoutMode = SLANG_MATRIX_LAYOUT_COLUMN_MAJOR;
 
         slang::ISession* session = nullptr;
         if (SLANG_FAILED(globalSession->createSession(sessionDesc, &session)) || !session) {

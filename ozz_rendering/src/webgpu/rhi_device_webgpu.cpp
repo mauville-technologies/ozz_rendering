@@ -135,10 +135,22 @@ namespace OZZ::rendering::webgpu {
 
         queue = wgpuDeviceGetQueue(device);
 
-        // Surface format
+        // Surface format — prefer an sRGB variant so the GPU automatically converts
+        // linear -> sRGB on output, same as the Vulkan backend's
+        // ChooseSurfaceFormatAndColorSpace (see initialization.h). Without this, WebGPU
+        // picks whatever Dawn lists first (typically a plain Unorm format), leaving
+        // shader output un-gamma-corrected and rendering visibly darker/lower-contrast
+        // than the Vulkan path for the same clear colors and shader math.
         WGPUSurfaceCapabilities caps = {};
         wgpuSurfaceGetCapabilities(surface, adapter, &caps);
         swapchainFormat = (caps.formatCount > 0) ? caps.formats[0] : WGPUTextureFormat_BGRA8Unorm;
+        for (size_t i = 0; i < caps.formatCount; i++) {
+            if (caps.formats[i] == WGPUTextureFormat_BGRA8UnormSrgb ||
+                caps.formats[i] == WGPUTextureFormat_RGBA8UnormSrgb) {
+                swapchainFormat = caps.formats[i];
+                break;
+            }
+        }
         wgpuSurfaceCapabilitiesFreeMembers(caps);
 
         // Initial size
@@ -154,18 +166,21 @@ namespace OZZ::rendering::webgpu {
             frameCommandBuffers[i] = commandBufferPool.Allocate(std::move(i));
         }
 
-        // Push constant emulation: 256-byte uniform buffer at set=PushConstantSet, binding=0
+        // Push constant emulation: dynamic-offset uniform buffer at set=PushConstantSet, binding=0.
+        // Sized to hold PushConstantSlotsPerFrame independent slots per in-flight frame so
+        // concurrent CPU recording of frame N+1 can't alias frame N's still-in-flight data.
         {
             WGPUBufferDescriptor pcBufDesc {};
-            pcBufDesc.size  = 256;
+            pcBufDesc.size  = static_cast<uint64_t>(PushConstantSlotSize) * PushConstantSlotsPerFrame * MaxFramesInFlight;
             pcBufDesc.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
             pushConstantBuffer = wgpuDeviceCreateBuffer(device, &pcBufDesc);
 
             WGPUBindGroupLayoutEntry pcEntry {};
-            pcEntry.binding               = PushConstantBinding;
-            pcEntry.visibility            = WGPUShaderStage_Vertex | WGPUShaderStage_Fragment;
-            pcEntry.buffer.type           = WGPUBufferBindingType_Uniform;
-            pcEntry.buffer.minBindingSize = 0;
+            pcEntry.binding                  = PushConstantBinding;
+            pcEntry.visibility               = WGPUShaderStage_Vertex | WGPUShaderStage_Fragment;
+            pcEntry.buffer.type              = WGPUBufferBindingType_Uniform;
+            pcEntry.buffer.hasDynamicOffset  = true;
+            pcEntry.buffer.minBindingSize    = PushConstantSlotSize;
             WGPUBindGroupLayoutDescriptor pcBGLDesc {};
             pcBGLDesc.entryCount = 1;
             pcBGLDesc.entries    = &pcEntry;
@@ -175,7 +190,7 @@ namespace OZZ::rendering::webgpu {
             pcBGEntry.binding = PushConstantBinding;
             pcBGEntry.buffer  = pushConstantBuffer;
             pcBGEntry.offset  = 0;
-            pcBGEntry.size    = 256;
+            pcBGEntry.size    = PushConstantSlotSize;
             WGPUBindGroupDescriptor pcBGDesc {};
             pcBGDesc.layout     = pushConstantBGL;
             pcBGDesc.entryCount = 1;
@@ -224,6 +239,8 @@ namespace OZZ::rendering::webgpu {
     // -------------------------------------------------------------------------
 
     RHIFrameContext RHIDeviceWebGPU::BeginFrame() {
+        std::lock_guard<std::recursive_mutex> lock(apiMutex);
+        pushConstantCursor = 0;
         auto [w, h] = platformContext.GetWindowFramebufferSizeFunction();
         uint32_t newW = static_cast<uint32_t>(w);
         uint32_t newH = static_cast<uint32_t>(h);
@@ -263,6 +280,7 @@ namespace OZZ::rendering::webgpu {
     }
 
     void RHIDeviceWebGPU::SubmitAndPresentFrame(RHIFrameContext&& frameContext) {
+        std::lock_guard<std::recursive_mutex> lock(apiMutex);
         // End any open render pass
         if (activeRenderPassEncoder) {
             wgpuRenderPassEncoderEnd(activeRenderPassEncoder);
@@ -279,6 +297,13 @@ namespace OZZ::rendering::webgpu {
         activeEncoder = nullptr;
 
         wgpuSurfacePresent(surface);
+
+        // Dawn (native/Vulkan backend) needs this pumped once per frame to process
+        // completed GPU work and advance internal per-queue bookkeeping (submitted
+        // command buffer reclamation, recording-context lifecycle). Without it, that
+        // internal state never advances and eventually hits an internal assertion
+        // (GetPendingRecordingContext) once enough frames/resources have piled up.
+        wgpuDeviceTick(device);
 
         // Release the swapchain texture handle allocated in BeginFrame
         RHITextureHandle colorHandle = frameContext.GetBackbufferImage();
@@ -304,6 +329,7 @@ namespace OZZ::rendering::webgpu {
     }
 
     std::pair<uint32_t, uint32_t> RHIDeviceWebGPU::GetSwapchainExtent() const {
+        std::lock_guard<std::recursive_mutex> lock(apiMutex);
         return {swapchainWidth, swapchainHeight};
     }
 
@@ -313,6 +339,7 @@ namespace OZZ::rendering::webgpu {
 
     void RHIDeviceWebGPU::BeginRenderPass(const RHIFrameContext& frameContext,
                                            const RenderPassDescriptor& rpDesc) {
+        std::lock_guard<std::recursive_mutex> lock(apiMutex);
         if (!activeEncoder) return;
 
         // Reset active pass formats; they will be set below from the actual attachments.
@@ -374,6 +401,7 @@ namespace OZZ::rendering::webgpu {
     }
 
     void RHIDeviceWebGPU::EndRenderPass(const RHIFrameContext&) {
+        std::lock_guard<std::recursive_mutex> lock(apiMutex);
         if (activeRenderPassEncoder) {
             wgpuRenderPassEncoderEnd(activeRenderPassEncoder);
             wgpuRenderPassEncoderRelease(activeRenderPassEncoder);
@@ -386,16 +414,19 @@ namespace OZZ::rendering::webgpu {
     // -------------------------------------------------------------------------
 
     void RHIDeviceWebGPU::TextureResourceBarrier(const RHIFrameContext&,
-                                                  const TextureBarrierDescriptor&) {}
+                                                  const TextureBarrierDescriptor&) {
+        std::lock_guard<std::recursive_mutex> lock(apiMutex);}
 
     void RHIDeviceWebGPU::BufferMemoryBarrier(const RHIFrameContext&,
-                                               const BufferBarrierDescriptor&) {}
+                                               const BufferBarrierDescriptor&) {
+        std::lock_guard<std::recursive_mutex> lock(apiMutex);}
 
     // -------------------------------------------------------------------------
     // State recording
     // -------------------------------------------------------------------------
 
     void RHIDeviceWebGPU::SetViewport(const RHIFrameContext&, const Viewport& vp) {
+        std::lock_guard<std::recursive_mutex> lock(apiMutex);
         if (!activeRenderPassEncoder) return;
         wgpuRenderPassEncoderSetViewport(activeRenderPassEncoder,
                                           vp.X, vp.Y, vp.Width, vp.Height,
@@ -403,6 +434,7 @@ namespace OZZ::rendering::webgpu {
     }
 
     void RHIDeviceWebGPU::SetScissor(const RHIFrameContext&, const Scissor& sc) {
+        std::lock_guard<std::recursive_mutex> lock(apiMutex);
         if (!activeRenderPassEncoder) return;
         wgpuRenderPassEncoderSetScissorRect(activeRenderPassEncoder,
                                              static_cast<uint32_t>(sc.X),
@@ -412,14 +444,17 @@ namespace OZZ::rendering::webgpu {
 
     void RHIDeviceWebGPU::SetGraphicsState(const RHIFrameContext&,
                                             const GraphicsStateDescriptor& state) {
+        std::lock_guard<std::recursive_mutex> lock(apiMutex);
         pendingState = state;
     }
 
     void RHIDeviceWebGPU::BindShader(const RHIFrameContext&, const RHIShaderHandle& handle) {
+        std::lock_guard<std::recursive_mutex> lock(apiMutex);
         pendingShaderHandle = handle;
     }
 
     void RHIDeviceWebGPU::BindBuffer(const RHIFrameContext&, const RHIBufferHandle& handle) {
+        std::lock_guard<std::recursive_mutex> lock(apiMutex);
         auto* buf = bufferPool.Get(handle);
         if (!buf) return;
         if (static_cast<uint8_t>(buf->Usage) & static_cast<uint8_t>(BufferUsage::VertexBuffer))
@@ -436,15 +471,25 @@ namespace OZZ::rendering::webgpu {
                                             uint32_t offset,
                                             uint32_t size,
                                             const void* data) {
-        if (!data || size == 0 || offset + size > 256) return;
-        std::memcpy(pendingPushConstantData + offset, data, size);
-        pendingPushConstantDirty = true;
+        std::lock_guard<std::recursive_mutex> lock(apiMutex);
+        if (!data || size == 0 || offset + size > PushConstantSlotSize) return;
+        if (pushConstantCursor >= PushConstantSlotsPerFrame) {
+            spdlog::error("WebGPU: push constant slots exhausted for this frame ({} draws)",
+                          PushConstantSlotsPerFrame);
+            return;
+        }
+        const uint64_t slotBase = (static_cast<uint64_t>(currentFrameIndex) * PushConstantSlotsPerFrame +
+                                    pushConstantCursor) * PushConstantSlotSize;
+        pushConstantCursor++;
+        wgpuQueueWriteBuffer(queue, pushConstantBuffer, slotBase + offset, data, size);
+        pendingPushConstantOffset = static_cast<uint32_t>(slotBase);
     }
 
     void RHIDeviceWebGPU::BindDescriptorSet(const RHIFrameContext&,
                                              RHIPipelineLayoutHandle,
                                              uint32_t setIndex,
                                              RHIDescriptorSetHandle descriptorSetHandle) {
+        std::lock_guard<std::recursive_mutex> lock(apiMutex);
         if (setIndex < MaxBoundDescriptorSets)
             pendingDescriptorSets[setIndex] = descriptorSetHandle;
     }
@@ -575,6 +620,7 @@ namespace OZZ::rendering::webgpu {
     void RHIDeviceWebGPU::Draw(const RHIFrameContext&,
                                 uint32_t vertexCount, uint32_t instanceCount,
                                 uint32_t firstVertex, uint32_t firstInstance) {
+        std::lock_guard<std::recursive_mutex> lock(apiMutex);
         if (!activeRenderPassEncoder) return;
         auto* shader = shaderPool.Get(pendingShaderHandle);
         if (!shader) return;
@@ -590,7 +636,10 @@ namespace OZZ::rendering::webgpu {
 
         WGPURenderPipeline pipeline = pipelineCache.GetOrCreate(key,
             [&](const PipelineKey& k) { return buildPipeline(k, *shader); });
-        if (!pipeline) return;
+        if (!pipeline) {
+            spdlog::error("WebGPU: pipeline build failed for shaderHandle.Id={}", pendingShaderHandle.Id);
+            return;
+        }
 
         wgpuRenderPassEncoderSetPipeline(activeRenderPassEncoder, pipeline);
 
@@ -606,18 +655,27 @@ namespace OZZ::rendering::webgpu {
                 wgpuRenderPassEncoderSetBindGroup(activeRenderPassEncoder, i, ds->bindGroup, 0, nullptr);
         }
 
-        if (pushConstantBG) {
+        // Only bind group 3 if THIS shader's pipeline layout actually declared one.
+        // The GLSL and Slang reflection paths signal "has push constants" two different,
+        // incompatible ways: GLSL (rhi_shader_webgpu.cpp reflectSPIRVStage) sets
+        // SetCount=4 and populates Sets[3] directly, leaving PushConstantCount at 0;
+        // Slang (reflectLayout) sets PushConstantCount>0 but never extends SetCount to
+        // cover set 3. Checking only one of these misses the other reflection path's
+        // shaders entirely, and unconditionally binding group 3 (the old behavior)
+        // mismatches shaders that truly have no push constant at all, e.g. hex.vert/frag —
+        // WebGPU then rejects the whole command buffer ("does not match layout... at
+        // group index 3" or "no bind group set at group index 1" once the resulting gap
+        // in set numbering is also skipped).
+        const bool hasPushConstants = shader->pipelineLayoutDescriptor.PushConstantCount > 0 ||
+                                       shader->pipelineLayoutDescriptor.SetCount > PushConstantSet;
+        if (pushConstantBG && hasPushConstants) {
             // Bind empty groups for gap slots (between last real set and PushConstantSet)
             for (uint32_t i = 1; i < PushConstantSet; i++) {
                 if (!pendingDescriptorSets[i].IsValid() && emptyBG)
                     wgpuRenderPassEncoderSetBindGroup(activeRenderPassEncoder, i, emptyBG, 0, nullptr);
             }
-            if (pendingPushConstantDirty) {
-                wgpuQueueWriteBuffer(queue, pushConstantBuffer, 0, pendingPushConstantData, 256);
-                pendingPushConstantDirty = false;
-            }
             wgpuRenderPassEncoderSetBindGroup(activeRenderPassEncoder, PushConstantSet,
-                                              pushConstantBG, 0, nullptr);
+                                              pushConstantBG, 1, &pendingPushConstantOffset);
         }
 
         wgpuRenderPassEncoderDraw(activeRenderPassEncoder, vertexCount, instanceCount,
@@ -628,6 +686,7 @@ namespace OZZ::rendering::webgpu {
                                        uint32_t indexCount, uint32_t instanceCount,
                                        uint32_t firstIndex, int32_t vertexOffset,
                                        uint32_t firstInstance) {
+        std::lock_guard<std::recursive_mutex> lock(apiMutex);
         if (!activeRenderPassEncoder) return;
         auto* shader = shaderPool.Get(pendingShaderHandle);
         if (!shader) return;
@@ -643,7 +702,10 @@ namespace OZZ::rendering::webgpu {
 
         WGPURenderPipeline pipeline = pipelineCache.GetOrCreate(key,
             [&](const PipelineKey& k) { return buildPipeline(k, *shader); });
-        if (!pipeline) return;
+        if (!pipeline) {
+            spdlog::error("WebGPU: pipeline build failed for shaderHandle.Id={}", pendingShaderHandle.Id);
+            return;
+        }
 
         wgpuRenderPassEncoderSetPipeline(activeRenderPassEncoder, pipeline);
 
@@ -664,18 +726,27 @@ namespace OZZ::rendering::webgpu {
                 wgpuRenderPassEncoderSetBindGroup(activeRenderPassEncoder, i, ds->bindGroup, 0, nullptr);
         }
 
-        if (pushConstantBG) {
+        // Only bind group 3 if THIS shader's pipeline layout actually declared one.
+        // The GLSL and Slang reflection paths signal "has push constants" two different,
+        // incompatible ways: GLSL (rhi_shader_webgpu.cpp reflectSPIRVStage) sets
+        // SetCount=4 and populates Sets[3] directly, leaving PushConstantCount at 0;
+        // Slang (reflectLayout) sets PushConstantCount>0 but never extends SetCount to
+        // cover set 3. Checking only one of these misses the other reflection path's
+        // shaders entirely, and unconditionally binding group 3 (the old behavior)
+        // mismatches shaders that truly have no push constant at all, e.g. hex.vert/frag —
+        // WebGPU then rejects the whole command buffer ("does not match layout... at
+        // group index 3" or "no bind group set at group index 1" once the resulting gap
+        // in set numbering is also skipped).
+        const bool hasPushConstants = shader->pipelineLayoutDescriptor.PushConstantCount > 0 ||
+                                       shader->pipelineLayoutDescriptor.SetCount > PushConstantSet;
+        if (pushConstantBG && hasPushConstants) {
             // Bind empty groups for gap slots (between last real set and PushConstantSet)
             for (uint32_t i = 1; i < PushConstantSet; i++) {
                 if (!pendingDescriptorSets[i].IsValid() && emptyBG)
                     wgpuRenderPassEncoderSetBindGroup(activeRenderPassEncoder, i, emptyBG, 0, nullptr);
             }
-            if (pendingPushConstantDirty) {
-                wgpuQueueWriteBuffer(queue, pushConstantBuffer, 0, pendingPushConstantData, 256);
-                pendingPushConstantDirty = false;
-            }
             wgpuRenderPassEncoderSetBindGroup(activeRenderPassEncoder, PushConstantSet,
-                                              pushConstantBG, 0, nullptr);
+                                              pushConstantBG, 1, &pendingPushConstantOffset);
         }
 
         wgpuRenderPassEncoderDrawIndexed(activeRenderPassEncoder, indexCount, instanceCount,
@@ -687,6 +758,7 @@ namespace OZZ::rendering::webgpu {
     // -------------------------------------------------------------------------
 
     RHIDescriptorSetHandle RHIDeviceWebGPU::CreateDescriptorSet(RHIDescriptorSetLayoutHandle layoutHandle) {
+        std::lock_guard<std::recursive_mutex> lock(apiMutex);
         DescriptorSetData ds {};
         ds.layoutHandle = layoutHandle;
         return descriptorSetPool.Allocate(std::move(ds));
@@ -694,6 +766,7 @@ namespace OZZ::rendering::webgpu {
 
     void RHIDeviceWebGPU::UpdateDescriptorSet(RHIDescriptorSetHandle handle,
                                                std::span<const RHIDescriptorWrite> writes) {
+        std::lock_guard<std::recursive_mutex> lock(apiMutex);
         auto* ds = descriptorSetPool.Get(handle);
         if (!ds) return;
 
@@ -714,7 +787,8 @@ namespace OZZ::rendering::webgpu {
 
             switch (write.Type) {
                 case DescriptorType::UniformBuffer:
-                case DescriptorType::StorageBuffer: {
+                case DescriptorType::StorageBuffer:
+                case DescriptorType::ReadOnlyStorageBuffer: {
                     auto* buf = bufferPool.Get(write.Buffer.Buffer);
                     if (!buf) continue;
                     entry.buffer = buf->Buffer;
@@ -723,6 +797,7 @@ namespace OZZ::rendering::webgpu {
                     break;
                 }
                 case DescriptorType::CombinedImageSampler:
+                case DescriptorType::DepthSampledImage:
                 case DescriptorType::SampledImage: {
                     auto* tex = texturePool.Get(write.Image.Texture);
                     if (!tex) continue;
@@ -757,6 +832,7 @@ namespace OZZ::rendering::webgpu {
     }
 
     void RHIDeviceWebGPU::FreeDescriptorSet(RHIDescriptorSetHandle handle) {
+        std::lock_guard<std::recursive_mutex> lock(apiMutex);
         descriptorSetPool.Free(handle);
     }
 
@@ -765,6 +841,7 @@ namespace OZZ::rendering::webgpu {
     // -------------------------------------------------------------------------
 
     RHITextureHandle RHIDeviceWebGPU::CreateTexture(TextureDescriptor&& descriptor) {
+        std::lock_guard<std::recursive_mutex> lock(apiMutex);
         WGPUTextureDescriptor desc {};
         desc.usage           = ToWebGPU(descriptor.Usage);
         desc.dimension       = WGPUTextureDimension_2D;
@@ -811,6 +888,7 @@ namespace OZZ::rendering::webgpu {
 
     void RHIDeviceWebGPU::UpdateTexture(const RHITextureHandle& handle,
                                          const void* data, size_t size) {
+        std::lock_guard<std::recursive_mutex> lock(apiMutex);
         auto* tex = texturePool.Get(handle);
         if (!tex || !tex->Texture) return;
 
@@ -832,6 +910,7 @@ namespace OZZ::rendering::webgpu {
     }
 
     void RHIDeviceWebGPU::FreeTexture(RHITextureHandle handle) {
+        std::lock_guard<std::recursive_mutex> lock(apiMutex);
         texturePool.Free(handle);
     }
 
@@ -846,6 +925,7 @@ namespace OZZ::rendering::webgpu {
     }
 
     RHIShaderHandle RHIDeviceWebGPU::CreateShader(ShaderFileParams&& fileParams) {
+        std::lock_guard<std::recursive_mutex> lock(apiMutex);
         RHIShaderWebGPU shader(device, slangSession, std::move(fileParams));
         if (!shader.IsValid()) return RHIShaderHandle::Null();
         RHIShaderHandle handle = shaderPool.Allocate(std::move(shader));
@@ -855,6 +935,7 @@ namespace OZZ::rendering::webgpu {
     }
 
     RHIShaderHandle RHIDeviceWebGPU::CreateShader(ShaderSourceParams&& sourceParams) {
+        std::lock_guard<std::recursive_mutex> lock(apiMutex);
         RHIShaderWebGPU shader(device, slangSession, std::move(sourceParams));
         if (!shader.IsValid()) return RHIShaderHandle::Null();
         RHIShaderHandle handle = shaderPool.Allocate(std::move(shader));
@@ -864,40 +945,54 @@ namespace OZZ::rendering::webgpu {
     }
 
     void RHIDeviceWebGPU::FreeShader(const RHIShaderHandle& handle) {
+        std::lock_guard<std::recursive_mutex> lock(apiMutex);
         shaderPool.Free(handle);
     }
 
     RHIPipelineLayoutDescriptor RHIDeviceWebGPU::GetShaderPipelineLayout(const RHIShaderHandle& handle) {
+        std::lock_guard<std::recursive_mutex> lock(apiMutex);
         auto* s = shaderPool.Get(handle);
         return s ? s->pipelineLayoutDescriptor : RHIPipelineLayoutDescriptor{};
     }
 
     RHIPipelineLayoutHandle RHIDeviceWebGPU::GetShaderPipelineLayoutHandle(const RHIShaderHandle& handle) {
+        std::lock_guard<std::recursive_mutex> lock(apiMutex);
         auto* s = shaderPool.Get(handle);
         return s ? s->pipelineLayoutHandle : RHIPipelineLayoutHandle::Null();
     }
 
     std::vector<RHIDescriptorSetLayoutHandle>
     RHIDeviceWebGPU::GetShaderDescriptorSetLayoutHandles(const RHIShaderHandle& handle) {
+        std::lock_guard<std::recursive_mutex> lock(apiMutex);
         auto* s = shaderPool.Get(handle);
         return s ? s->descriptorSetLayoutHandles : std::vector<RHIDescriptorSetLayoutHandle>{};
     }
 
     std::pair<RHIPipelineLayoutHandle, std::set<RHIDescriptorSetLayoutHandle>>
     RHIDeviceWebGPU::CreatePipelineLayout(const RHIPipelineLayoutDescriptor& desc) {
+        std::lock_guard<std::recursive_mutex> lock(apiMutex);
         std::vector<WGPUBindGroupLayout> bgls;
         std::set<RHIDescriptorSetLayoutHandle> outHandles;
 
-        for (uint32_t i = 0; i < desc.SetCount; i++) {
+        // Slot PushConstantSet (3) is always special-cased below via pushConstantBGL —
+        // never build it here via the generic path. The GLSL reflection path
+        // (reflectSPIRVStage) populates desc.Sets[3] directly with a plain
+        // UniformBuffer-typed binding (SetCount==4), which CreateDescriptorSetLayout would
+        // turn into a NON-dynamic-offset layout — incompatible with the dynamic-offset
+        // pushConstantBG the draw calls actually bind there, causing WebGPU to reject the
+        // pipeline ("does not match layout... at group index 3").
+        for (uint32_t i = 0; i < desc.SetCount && i < PushConstantSet; i++) {
             RHIDescriptorSetLayoutHandle h = CreateDescriptorSetLayout(desc.Sets[i]);
             outHandles.insert(h);
             auto* bgl = bindGroupLayoutPool.Get(h);
             if (bgl) bgls.push_back(*bgl);
         }
 
-        // If the shader uses push constants, extend the layout to include pushConstantBGL
-        // at slot PushConstantSet (3). Fill any gap slots with empty BGLs.
-        if (desc.PushConstantCount > 0 && pushConstantBGL) {
+        // The GLSL and Slang reflection paths signal "this shader has push constants" two
+        // different, incompatible ways — see the Draw/DrawIndexed comment for details.
+        // Check both so shaders from either path get slot 3 wired up correctly.
+        const bool hasPushConstants = desc.PushConstantCount > 0 || desc.SetCount > PushConstantSet;
+        if (hasPushConstants && pushConstantBGL) {
             while (bgls.size() < PushConstantSet) {
                 const RHIDescriptorSetLayoutDescriptor emptySet {};
                 auto h = CreateDescriptorSetLayout(emptySet);
@@ -918,6 +1013,7 @@ namespace OZZ::rendering::webgpu {
 
     RHIDescriptorSetLayoutHandle
     RHIDeviceWebGPU::CreateDescriptorSetLayout(const RHIDescriptorSetLayoutDescriptor& desc) {
+        std::lock_guard<std::recursive_mutex> lock(apiMutex);
         std::vector<WGPUBindGroupLayoutEntry> entries;
         entries.reserve(desc.BindingCount);
 
@@ -935,6 +1031,9 @@ namespace OZZ::rendering::webgpu {
                 case DescriptorType::StorageBuffer:
                     entry.buffer.type = WGPUBufferBindingType_Storage;
                     break;
+                case DescriptorType::ReadOnlyStorageBuffer:
+                    entry.buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
+                    break;
                 case DescriptorType::SampledImage:
                     entry.texture.sampleType    = WGPUTextureSampleType_Float;
                     entry.texture.viewDimension = WGPUTextureViewDimension_2D;
@@ -943,8 +1042,14 @@ namespace OZZ::rendering::webgpu {
                     entry.sampler.type = WGPUSamplerBindingType_Filtering;
                     break;
                 case DescriptorType::CombinedImageSampler:
-                    // Texture entry at the declared binding
-                    entry.texture.sampleType    = WGPUTextureSampleType_Float;
+                case DescriptorType::DepthSampledImage: {
+                    // Texture entry at the declared binding. Depth-format textures must be
+                    // declared UnfilterableFloat (not Float) and paired with a NonFiltering
+                    // sampler — Vulkan has no such distinction, but WebGPU rejects a plain
+                    // Float sampleType against a Depth32Float texture at bind-group creation.
+                    bool isDepth = (b.Type == DescriptorType::DepthSampledImage);
+                    entry.texture.sampleType    = isDepth ? WGPUTextureSampleType_UnfilterableFloat
+                                                           : WGPUTextureSampleType_Float;
                     entry.texture.viewDimension = WGPUTextureViewDimension_2D;
                     entries.push_back(entry);
                     {
@@ -952,10 +1057,12 @@ namespace OZZ::rendering::webgpu {
                         WGPUBindGroupLayoutEntry samplerEntry {};
                         samplerEntry.binding      = b.Binding + 1;
                         samplerEntry.visibility   = entry.visibility;
-                        samplerEntry.sampler.type = WGPUSamplerBindingType_Filtering;
+                        samplerEntry.sampler.type = isDepth ? WGPUSamplerBindingType_NonFiltering
+                                                             : WGPUSamplerBindingType_Filtering;
                         entries.push_back(samplerEntry);
                     }
                     continue;
+                }
                 case DescriptorType::StorageImage:
                     entry.storageTexture.access        = WGPUStorageTextureAccess_WriteOnly;
                     entry.storageTexture.format        = WGPUTextureFormat_RGBA8Unorm;
@@ -978,6 +1085,7 @@ namespace OZZ::rendering::webgpu {
     // -------------------------------------------------------------------------
 
     RHIBufferHandle RHIDeviceWebGPU::CreateBuffer(BufferDescriptor&& desc) {
+        std::lock_guard<std::recursive_mutex> lock(apiMutex);
         WGPUBufferDescriptor wgpuDesc {};
         wgpuDesc.size  = desc.Size;
         wgpuDesc.usage = ToWebGPU(desc.Usage) | WGPUBufferUsage_CopyDst; // CopyDst for WriteBuffer
@@ -995,12 +1103,14 @@ namespace OZZ::rendering::webgpu {
 
     void RHIDeviceWebGPU::UpdateBuffer(const RHIBufferHandle& handle,
                                         const void* data, size_t size, size_t offset) {
+        std::lock_guard<std::recursive_mutex> lock(apiMutex);
         auto* buf = bufferPool.Get(handle);
         if (!buf || !buf->Buffer) return;
         wgpuQueueWriteBuffer(queue, buf->Buffer, offset, data, size);
     }
 
     void RHIDeviceWebGPU::FreeBuffer(const RHIBufferHandle& handle) {
+        std::lock_guard<std::recursive_mutex> lock(apiMutex);
         bufferPool.Free(handle);
     }
 

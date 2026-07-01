@@ -372,8 +372,10 @@ namespace OZZ::rendering::vk {
             case DescriptorType::UniformBuffer:
                 return VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
             case DescriptorType::StorageBuffer:
+            case DescriptorType::ReadOnlyStorageBuffer: // Vulkan has no read-only storage buffer descriptor type
                 return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             case DescriptorType::CombinedImageSampler:
+            case DescriptorType::DepthSampledImage: // Vulkan samples depth textures like any other combined sampler
                 return VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             case DescriptorType::SampledImage:
                 return VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;

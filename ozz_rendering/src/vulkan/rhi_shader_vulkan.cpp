@@ -313,6 +313,10 @@ namespace OZZ::rendering::vk {
         slang::SessionDesc sessionDesc = {};
         sessionDesc.targets     = &targetDesc;
         sessionDesc.targetCount = 1;
+        // GLM (used for all matrices uploaded via UBO/push-constant) is column-major;
+        // Slang defaults to row-major, which silently transposes every matrix read in
+        // shader code (e.g. camera.proj/view, pc.model) unless overridden here.
+        sessionDesc.defaultMatrixLayoutMode = SLANG_MATRIX_LAYOUT_COLUMN_MAJOR;
 
         slang::ISession* session = nullptr;
         if (SLANG_FAILED(slangSession->createSession(sessionDesc, &session)) || !session) {

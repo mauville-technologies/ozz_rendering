@@ -12,6 +12,7 @@
 #include <webgpu/webgpu.h>
 
 #include <array>
+#include <mutex>
 #include <set>
 #include <vector>
 
@@ -115,6 +116,15 @@ namespace OZZ::rendering::webgpu {
         void flushPendingDrawState();
 
     private:
+        // Dawn (native/Vulkan backend) is not safe to call concurrently from multiple
+        // threads on the same device/queue. SceneLayerManager::InitLayerAsync runs layer
+        // Init() (which calls CreateBuffer/UpdateBuffer/CreateTexture/etc.) on a background
+        // thread while the main thread is simultaneously mid-frame (BeginFrame/Draw/Submit)
+        // rendering the loading screen — without serializing access, this races inside
+        // Dawn's internal Vulkan backend and segfaults. Every public entry point below
+        // takes this lock for its duration.
+        mutable std::recursive_mutex apiMutex;
+
         PlatformContext platformContext;
 
         WGPUInstance instance {nullptr};
@@ -153,17 +163,25 @@ namespace OZZ::rendering::webgpu {
         bool                    hasPendingIndexBuffer {false};
         std::array<RHIDescriptorSetHandle, MaxBoundDescriptorSets> pendingDescriptorSets {};
 
-        // Push constants emulated via a 256-byte uniform buffer at set=3, binding=0
-        static constexpr uint32_t PushConstantSet     = 3;
-        static constexpr uint32_t PushConstantBinding = 0;
+        // Push constants emulated via a dynamic-offset uniform buffer at set=3, binding=0.
+        // wgpuQueueWriteBuffer takes effect immediately (queue-timeline), while draws are
+        // recorded into activeEncoder and only submitted at end-of-frame — so a single
+        // shared 256-byte buffer would let every draw in the frame see only the LAST
+        // object's data by the time the GPU actually executes. Each SetPushConstants call
+        // instead writes to its own never-reused slot, and the matching draw binds that
+        // slot via a dynamic offset.
+        static constexpr uint32_t PushConstantSet           = 3;
+        static constexpr uint32_t PushConstantBinding       = 0;
+        static constexpr uint32_t PushConstantSlotSize      = 256;
+        static constexpr uint32_t PushConstantSlotsPerFrame = 4096;
         WGPUBuffer          pushConstantBuffer {nullptr};
         WGPUBindGroupLayout pushConstantBGL    {nullptr};
         WGPUBindGroup       pushConstantBG     {nullptr};
         // Empty BGL/BG used to satisfy gap slots in pipeline layouts with push constants
         WGPUBindGroupLayout emptyBGL           {nullptr};
         WGPUBindGroup       emptyBG            {nullptr};
-        uint8_t             pendingPushConstantData[256] {};
-        bool                pendingPushConstantDirty {false};
+        uint32_t            pushConstantCursor       {0}; // slot index within current frame's region; reset each BeginFrame
+        uint32_t            pendingPushConstantOffset {0}; // byte offset of the most recently written slot
 
         // Resource pools
         ResourcePool<TextureTag,             RHITextureWebGPU>    texturePool;
