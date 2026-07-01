@@ -178,6 +178,11 @@ namespace OZZ::rendering::vk {
         uint8_t framesInFlight {0};
         uint64_t currentFrame {0};
 
+        // True once SetGraphicsState has been called in the current render pass;
+        // reset in beginRenderPassInternal. Guards against draws inheriting stale
+        // command-buffer dynamic state (see drawInternal / drawIndexedInternal).
+        bool stateSetThisPass {false};
+
         std::array<std::vector<std::function<void()>>, MaxFramesInFlight> perFrameDeletions {};
 
         /**

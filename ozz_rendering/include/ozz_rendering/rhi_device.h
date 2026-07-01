@@ -113,6 +113,8 @@ namespace OZZ::rendering {
         // Command Buffer Recording - State
         virtual void SetViewport(const RHIFrameContext& frameContext, const Viewport& viewport) = 0;
         virtual void SetScissor(const RHIFrameContext& frameContext, const Scissor& scissor) = 0;
+        // Contract: graphics state must be set explicitly after each BeginRenderPass,
+        // before any draw. State never carries over from a previous render pass.
         virtual void SetGraphicsState(const RHIFrameContext& frameContext,
                                       const GraphicsStateDescriptor& graphicsStateDescriptor) = 0;
 

@@ -164,6 +164,9 @@ namespace OZZ::rendering::webgpu {
         RHIBufferHandle         pendingVertexBuffer {};
         RHIBufferHandle         pendingIndexBuffer {};
         bool                    hasPendingIndexBuffer {false};
+        // True once SetGraphicsState has been called in the current render pass;
+        // reset in BeginRenderPass. Guards against draws inheriting stale state.
+        bool                    stateSetThisPass {false};
         std::array<RHIDescriptorSetHandle, MaxBoundDescriptorSets> pendingDescriptorSets {};
 
         // Push constants emulated via a dynamic-offset uniform buffer at

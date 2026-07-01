@@ -8,6 +8,7 @@
 #include "utils/rhi_vulkan_types.h"
 
 #include <algorithm>
+#include <cassert>
 #include <fstream>
 #include <ranges>
 #include <spdlog/spdlog.h>
@@ -1113,6 +1114,9 @@ namespace OZZ::rendering::vk {
     void RHIDeviceVulkan::beginRenderPassInternal(VkCommandBuffer cmd,
                                                   const RenderPassDescriptor& renderPassDescriptor) {
         OZZ_GPU_ZONE(tracyGpuContext, cmd, "BeginRenderPass");
+        // Graphics state does not carry across render passes: callers must call
+        // SetGraphicsState after each BeginRenderPass, before any draw.
+        stateSetThisPass = false;
         std::array<VkRenderingAttachmentInfo, MaxColorAttachments> colorAttachments;
         uint32_t colorAttachmentCount = 0;
         bool bHasDepthAttachment = false;
@@ -1334,6 +1338,7 @@ namespace OZZ::rendering::vk {
     void RHIDeviceVulkan::setGraphicsStateInternal(VkCommandBuffer cmd,
                                                    const GraphicsStateDescriptor& graphicsStateDescriptor) {
         OZZ_GPU_ZONE(tracyGpuContext, cmd, "SetGraphicsState");
+        stateSetThisPass = true;
         // Input Assembly
         vkCmdSetPrimitiveTopology(cmd,
                                   ConvertPrimitiveTopologyToVulkan(graphicsStateDescriptor.InputAssembly.Topology));
@@ -1558,6 +1563,15 @@ namespace OZZ::rendering::vk {
                                        uint32_t firstVertex,
                                        uint32_t firstInstance) {
         OZZ_GPU_ZONE(tracyGpuContext, cmd, "Draw");
+        // Unlike WebGPU, the draw is NOT skipped here: Vulkan dynamic state lives in the
+        // command buffer and cannot be cheaply reset per pass, so release builds keep the
+        // (stale-state-inheriting) behavior. The assert catches the portability bug.
+        if (!stateSetThisPass) {
+            spdlog::error("Draw issued without SetGraphicsState in current render pass");
+#ifdef OZZ_DEBUG
+            assert(false && "Draw without SetGraphicsState in current render pass");
+#endif
+        }
         vkCmdDraw(cmd, vertexCount, instanceCount, firstVertex, firstInstance);
     }
 
@@ -1583,6 +1597,13 @@ namespace OZZ::rendering::vk {
                                               int32_t vertexOffset,
                                               uint32_t firstInstance) {
         OZZ_GPU_ZONE(tracyGpuContext, cmd, "DrawIndexed");
+        // See drawInternal: log/assert only, never skip the draw on Vulkan.
+        if (!stateSetThisPass) {
+            spdlog::error("Draw issued without SetGraphicsState in current render pass");
+#ifdef OZZ_DEBUG
+            assert(false && "Draw without SetGraphicsState in current render pass");
+#endif
+        }
         vkCmdDrawIndexed(cmd, indexCount, instanceCount, firstIndex, vertexOffset, firstInstance);
     }
 

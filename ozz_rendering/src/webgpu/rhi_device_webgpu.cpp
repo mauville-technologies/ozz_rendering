@@ -9,6 +9,7 @@
 #include <slang.h>
 #include <spdlog/spdlog.h>
 
+#include <cassert>
 #include <cstring>
 #include <stdexcept>
 #include <vector>
@@ -346,6 +347,11 @@ namespace OZZ::rendering::webgpu {
         activePassColorFormat = WGPUTextureFormat_Undefined;
         activePassDepthFormat = WGPUTextureFormat_Undefined;
 
+        // Graphics state does not carry across render passes: callers must call
+        // SetGraphicsState after each BeginRenderPass, before any draw.
+        pendingState     = {};
+        stateSetThisPass = false;
+
         std::vector<WGPURenderPassColorAttachment> colorAttachments;
         colorAttachments.reserve(rpDesc.ColorAttachmentCount);
 
@@ -444,7 +450,8 @@ namespace OZZ::rendering::webgpu {
     void RHIDeviceWebGPU::SetGraphicsState(const RHIFrameContext&,
                                             const GraphicsStateDescriptor& state) {
         std::lock_guard<std::recursive_mutex> lock(apiMutex);
-        pendingState = state;
+        pendingState     = state;
+        stateSetThisPass = true;
     }
 
     void RHIDeviceWebGPU::BindShader(const RHIFrameContext&, const RHIShaderHandle& handle) {
@@ -617,6 +624,15 @@ namespace OZZ::rendering::webgpu {
     // -------------------------------------------------------------------------
 
     bool RHIDeviceWebGPU::flushPendingDrawState() {
+        if (!stateSetThisPass) {
+            spdlog::error("Draw issued without SetGraphicsState in current render pass");
+#ifdef OZZ_DEBUG
+            assert(false && "Draw without SetGraphicsState in current render pass");
+#endif
+            // Skip the draw: without explicit state the pipeline key would be built
+            // from a default-constructed GraphicsStateDescriptor (garbage pipeline).
+            return false;
+        }
         if (!activeRenderPassEncoder) return false;
         auto* shader = shaderPool.Get(pendingShaderHandle);
         if (!shader) return false;
