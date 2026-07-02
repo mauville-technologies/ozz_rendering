@@ -82,7 +82,7 @@ namespace OZZ::rendering::vk {
         std::optional<CompiledShaderProgram> compiledOpt;
 
 #ifdef OZZ_SLANG_ENABLED
-        if (!shaderSources.Slang.empty() || shaderSources.IsSlang) {
+        if (!shaderSources.Slang.empty()) {
             if (!slangSession) {
                 spdlog::error("Slang shader requested but no Slang session provided");
                 return false;
@@ -301,13 +301,7 @@ namespace OZZ::rendering::vk {
     {
         OZZ_PROFILE_FUNCTION;
 
-        // Prefer the dedicated Slang field; fall back to the legacy IsSlang+Vertex path.
-        const std::string& slangSrc = !shaderSources.Slang.empty() ? shaderSources.Slang : shaderSources.Vertex;
-        std::string combined = slangSrc;
-        if (!shaderSources.Fragment.empty() && shaderSources.Fragment != slangSrc) {
-            combined += "\n";
-            combined += shaderSources.Fragment;
-        }
+        std::string combined = shaderSources.Slang;
 
         slang::TargetDesc targetDesc = {};
         targetDesc.format = SLANG_SPIRV;

@@ -829,7 +829,6 @@ namespace OZZ::rendering::webgpu {
                     break;
                 }
                 case DescriptorType::CombinedImageSampler:
-                case DescriptorType::DepthSampledImage:
                 case DescriptorType::SampledImage: {
                     auto* tex = texturePool.Get(write.Image.Texture);
                     if (!tex) continue;
@@ -1094,6 +1093,26 @@ namespace OZZ::rendering::webgpu {
         std::vector<WGPUBindGroupLayoutEntry> entries;
         entries.reserve(desc.BindingCount);
 
+        // Slang-reflected layouts declare texture/sampler pairs as EXPLICIT separate
+        // bindings (Sampler at texture binding+1); the GLSL-patch path instead consumed
+        // the sampler and relies on the auto-added entry below. Collect the explicit
+        // sampler bindings so a depth-resolved texture demotes its existing sampler
+        // entry to NonFiltering instead of appending a duplicate binding.
+        std::array<bool, MaxBoundDescriptorSets * 2> explicitSampler {};
+        for (uint32_t i = 0; i < desc.BindingCount; i++) {
+            const auto& b = desc.Bindings[i];
+            if (b.Count != 0 && b.Type == DescriptorType::Sampler &&
+                b.Binding < explicitSampler.size()) {
+                explicitSampler[b.Binding] = true;
+            }
+        }
+        auto isDepthPairedSampler = [&](uint32_t samplerBinding) {
+            // A sampler at binding N pairs with a texture at N-1.
+            if (samplerBinding == 0) return false;
+            const uint32_t texBinding = samplerBinding - 1;
+            return texBinding < MaxBoundDescriptorSets && depthResolved[texBinding];
+        };
+
         for (uint32_t i = 0; i < desc.BindingCount; i++) {
             const auto& b = desc.Bindings[i];
             if (b.Count == 0) continue; // empty/consumed slot — skip
@@ -1120,9 +1139,10 @@ namespace OZZ::rendering::webgpu {
                                                            : WGPUTextureSampleType_Float;
                     entry.texture.viewDimension = WGPUTextureViewDimension_2D;
                     entries.push_back(entry);
-                    if (isDepth) {
-                        // A depth-resolved SampledImage gets its paired sampler at binding+1
-                        // demoted to NonFiltering (mirrors the DepthSampledImage case).
+                    if (isDepth && !(b.Binding + 1 < explicitSampler.size() &&
+                                     explicitSampler[b.Binding + 1])) {
+                        // No explicit sampler declared at binding+1 (GLSL-patch layouts):
+                        // add the paired NonFiltering sampler entry ourselves.
                         WGPUBindGroupLayoutEntry samplerEntry {};
                         samplerEntry.binding      = b.Binding + 1;
                         samplerEntry.visibility   = entry.visibility;
@@ -1132,30 +1152,11 @@ namespace OZZ::rendering::webgpu {
                     continue;
                 }
                 case DescriptorType::Sampler:
-                    entry.sampler.type = WGPUSamplerBindingType_Filtering;
+                    // A sampler paired with a depth-resolved texture must be NonFiltering.
+                    entry.sampler.type = isDepthPairedSampler(b.Binding)
+                                             ? WGPUSamplerBindingType_NonFiltering
+                                             : WGPUSamplerBindingType_Filtering;
                     break;
-                case DescriptorType::CombinedImageSampler:
-                case DescriptorType::DepthSampledImage: {
-                    // Texture entry at the declared binding. Depth-format textures must be
-                    // declared UnfilterableFloat (not Float) and paired with a NonFiltering
-                    // sampler — Vulkan has no such distinction, but WebGPU rejects a plain
-                    // Float sampleType against a Depth32Float texture at bind-group creation.
-                    bool isDepth = (b.Type == DescriptorType::DepthSampledImage);
-                    entry.texture.sampleType    = isDepth ? WGPUTextureSampleType_UnfilterableFloat
-                                                           : WGPUTextureSampleType_Float;
-                    entry.texture.viewDimension = WGPUTextureViewDimension_2D;
-                    entries.push_back(entry);
-                    {
-                        // Sampler entry at binding+1 (Slang WGSL convention for split combined samplers)
-                        WGPUBindGroupLayoutEntry samplerEntry {};
-                        samplerEntry.binding      = b.Binding + 1;
-                        samplerEntry.visibility   = entry.visibility;
-                        samplerEntry.sampler.type = isDepth ? WGPUSamplerBindingType_NonFiltering
-                                                             : WGPUSamplerBindingType_Filtering;
-                        entries.push_back(samplerEntry);
-                    }
-                    continue;
-                }
                 case DescriptorType::StorageImage:
                     // Stub: valid only for RGBA8Unorm write-only storage images. The RHI
                     // descriptor carries no format/access info yet — it will need to be
@@ -1164,6 +1165,11 @@ namespace OZZ::rendering::webgpu {
                     entry.storageTexture.format        = WGPUTextureFormat_RGBA8Unorm;
                     entry.storageTexture.viewDimension = WGPUTextureViewDimension_2D;
                     break;
+                // CombinedImageSampler is produced only by the Vulkan GLSL reflection path;
+                // Slang WGSL reflection (the only WebGPU source) emits SampledImage/Sampler,
+                // so it is unreachable here. Skip it to keep the switch exhaustive.
+                default:
+                    continue;
             }
             entries.push_back(entry);
         }
@@ -1180,16 +1186,6 @@ namespace OZZ::rendering::webgpu {
 
         BindGroupLayoutData data {};
         data.sourceDesc = desc;
-        // Idempotence guard: a name-heuristic DepthSampledImage binding is ALREADY built
-        // as UnfilterableFloat here, so mark it resolved up front — the lazy path must not
-        // rebuild it when it later sees the depth texture (depthResolved would be false).
-        for (uint32_t i = 0; i < desc.BindingCount; i++) {
-            const auto& b = desc.Bindings[i];
-            if (b.Count == 0) continue;
-            if (b.Type == DescriptorType::DepthSampledImage && b.Binding < MaxBoundDescriptorSets) {
-                data.depthResolved[b.Binding] = true;
-            }
-        }
         data.bgl = buildBindGroupLayoutObject(desc, data.depthResolved);
 
         return bindGroupLayoutPool.Allocate(std::move(data));

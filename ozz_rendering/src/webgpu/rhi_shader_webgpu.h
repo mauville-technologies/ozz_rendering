@@ -39,7 +39,6 @@ namespace OZZ::rendering::webgpu {
 
     private:
         bool compile(WGPUDevice device, slang::IGlobalSession* slangSession, ShaderSourceParams&& params);
-        bool compileGLSL(WGPUDevice device, ShaderSourceParams&& params);
         static RHIPipelineLayoutDescriptor reflectLayout(slang::IComponentType* linked);
 
         static WGPUShaderModule createWGSLModule(WGPUDevice device,
