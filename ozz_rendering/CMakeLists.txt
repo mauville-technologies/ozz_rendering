@@ -20,6 +20,12 @@ set(SOURCES
         src/vulkan/rhi_texture_vulkan.cpp
 )
 
+if(OZZ_ENABLE_SLANG)
+    list(APPEND SOURCES
+            src/slang/slang_compile.cpp
+    )
+endif()
+
 if(OZZ_ENABLE_WEBGPU)
     list(APPEND SOURCES
             src/webgpu/rhi_device_webgpu.cpp

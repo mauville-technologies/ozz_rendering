@@ -16,6 +16,10 @@
 
 #include <ozz_rendering/profiling.h>
 
+#ifdef OZZ_SLANG_ENABLED
+#include "slang/slang_compile.h"
+#endif
+
 namespace OZZ::rendering::vk {
     namespace {
         // glslang::InitializeProcess() sets up process-wide global state (the SPIR-V
@@ -321,123 +325,39 @@ namespace OZZ::rendering::vk {
     {
         OZZ_PROFILE_FUNCTION;
 
-        std::string combined = shaderSources.Slang;
-
-        slang::TargetDesc targetDesc = {};
-        targetDesc.format = SLANG_SPIRV;
-
-        slang::SessionDesc sessionDesc = {};
-        sessionDesc.targets     = &targetDesc;
-        sessionDesc.targetCount = 1;
-        // GLM (used for all matrices uploaded via UBO/push-constant) is column-major;
-        // Slang defaults to row-major, which silently transposes every matrix read in
-        // shader code (e.g. camera.proj/view, pc.model) unless overridden here.
-        sessionDesc.defaultMatrixLayoutMode = SLANG_MATRIX_LAYOUT_COLUMN_MAJOR;
-
-        // Slang preprocessor macros. The macro descs hold raw c_str pointers into
-        // shaderSources.Defines, which outlives this compile, so no local copy is needed.
-        std::vector<slang::PreprocessorMacroDesc> macros;
-        macros.reserve(shaderSources.Defines.size());
-        for (const auto& def : shaderSources.Defines) {
-            macros.push_back({def.Name.c_str(), def.Value.c_str()});
-        }
-        if (!macros.empty()) {
-            sessionDesc.preprocessorMacros     = macros.data();
-            sessionDesc.preprocessorMacroCount = static_cast<SlangInt>(macros.size());
-        }
-
+        std::string diagnostics;
         slang::ISession* session = nullptr;
-        if (SLANG_FAILED(slangSession->createSession(sessionDesc, &session)) || !session) {
-            spdlog::error("Slang: failed to create session for SPIR-V compilation");
+        auto compiledOpt = slang_compile::CompileSlangProgram(
+            slangSession, SLANG_SPIRV, shaderSources.Slang, shaderSources.Defines,
+            diagnostics, session, "vertexMain", "fragmentMain");
+        if (!diagnostics.empty()) {
+            spdlog::warn("Slang diagnostics:\n{}", diagnostics);
+        }
+        // Hold any created session alive to avoid the corrupt-free crash, whether
+        // or not compilation succeeded (session is null if none could be created).
+        slangCompileSession = session;
+        if (!compiledOpt.has_value()) {
+            spdlog::error("Slang: SPIR-V compilation failed");
             return std::nullopt;
         }
 
-        ISlangBlob* diagBlob = nullptr;
+        auto& slangResult = compiledOpt.value();
 
-        slang::IModule* module = session->loadModuleFromSourceString(
-            "shader", "shader.slang", combined.c_str(), &diagBlob);
-        if (diagBlob) {
-            spdlog::warn("Slang diagnostics:\n{}",
-                static_cast<const char*>(diagBlob->getBufferPointer()));
-            diagBlob->release();
-            diagBlob = nullptr;
-        }
-        if (!module) {
-            spdlog::error("Slang: shader module load failed");
-            slangCompileSession = session;
-            return std::nullopt;
-        }
-
-        slang::IEntryPoint* vertEP = nullptr;
-        slang::IEntryPoint* fragEP = nullptr;
-        module->findAndCheckEntryPoint("vertexMain", SLANG_STAGE_VERTEX, &vertEP, &diagBlob);
-        if (diagBlob) { diagBlob->release(); diagBlob = nullptr; }
-        module->findAndCheckEntryPoint("fragmentMain", SLANG_STAGE_FRAGMENT, &fragEP, &diagBlob);
-        if (diagBlob) { diagBlob->release(); diagBlob = nullptr; }
-
-        if (!vertEP) {
-            spdlog::error("Slang: no 'vertexMain' entry point found");
-            module->release();
-            slangCompileSession = session;
-            return std::nullopt;
-        }
-        if (!fragEP) {
-            spdlog::error("Slang: no 'fragmentMain' entry point found");
-            if (vertEP) vertEP->release();
-            module->release();
-            slangCompileSession = session;
-            return std::nullopt;
-        }
-
-        slang::IComponentType* components[] = { module, vertEP, fragEP };
-        slang::IComponentType* composite = nullptr;
-        session->createCompositeComponentType(components, 3, &composite, &diagBlob);
-        if (diagBlob) { diagBlob->release(); diagBlob = nullptr; }
-
-        slang::IComponentType* linked = nullptr;
-        if (composite) {
-            composite->link(&linked, &diagBlob);
-            if (diagBlob) { diagBlob->release(); diagBlob = nullptr; }
-            composite->release();
-        }
-        if (!linked) {
-            spdlog::error("Slang: shader link failed");
-            vertEP->release();
-            fragEP->release();
-            module->release();
-            slangCompileSession = session;
-            return std::nullopt;
-        }
-
-        auto extractSPIRV = [&](int epIdx) -> std::vector<uint32_t> {
-            ISlangBlob* codeBlob = nullptr;
-            if (SLANG_FAILED(linked->getEntryPointCode(epIdx, 0, &codeBlob, &diagBlob)) || !codeBlob) {
-                if (diagBlob) { diagBlob->release(); diagBlob = nullptr; }
-                return {};
-            }
-            if (diagBlob) { diagBlob->release(); diagBlob = nullptr; }
+        auto extractSPIRV = [](ISlangBlob* codeBlob) -> std::vector<uint32_t> {
+            if (!codeBlob) return {};
             const auto* data = static_cast<const uint32_t*>(codeBlob->getBufferPointer());
             size_t wordCount = codeBlob->getBufferSize() / sizeof(uint32_t);
-            std::vector<uint32_t> result(data, data + wordCount);
-            codeBlob->release();
-            return result;
+            return std::vector<uint32_t>(data, data + wordCount);
         };
 
         // Entry points are in order: vertexMain=0, fragmentMain=1
         CompiledShaderProgram compiled;
-        compiled.VertexSpirv   = extractSPIRV(0);
-        compiled.FragmentSpirv = extractSPIRV(1);
+        compiled.VertexSpirv   = extractSPIRV(slangResult.VertexBlob);
+        compiled.FragmentSpirv = extractSPIRV(slangResult.FragmentBlob);
 
-        linked->release();
-        vertEP->release();
-        fragEP->release();
-        module->release();
-        // Slang 2026.8.1 bug: session->release() triggers heap corruption for some
-        // shaders. Hold the compile session alive; OS reclaims at program exit. Note
-        // this leaks one ISession per shader for the lifetime of the process.
-        // TODO(slang>2026.8.1): re-test session->release(); currently crashes / corrupts
-        // heap in 2026.8.1.
-        slangCompileSession = session;
+        if (slangResult.VertexBlob)   slangResult.VertexBlob->release();
+        if (slangResult.FragmentBlob) slangResult.FragmentBlob->release();
+        slangResult.Linked->release();
 
         if (compiled.VertexSpirv.empty()) {
             spdlog::error("Slang: failed to extract vertex SPIR-V");

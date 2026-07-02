@@ -1,5 +1,6 @@
 #include "rhi_shader_webgpu.h"
 
+#include "slang/slang_compile.h"
 #include "utils/push_constants.h"
 
 #include <filesystem>
@@ -174,125 +175,41 @@ namespace OZZ::rendering::webgpu {
             pos += kSlangPCReplace.size();
         }
 
-        slang::TargetDesc targetDesc = {};
-        targetDesc.format = SLANG_WGSL;
-
-        slang::SessionDesc sessionDesc = {};
-        sessionDesc.targets     = &targetDesc;
-        sessionDesc.targetCount = 1;
-        // GLM (used for all matrices uploaded via UBO/push-constant) is column-major;
-        // Slang defaults to row-major, which silently transposes every matrix read in
-        // shader code (e.g. camera.proj/view, pc.model) unless overridden here.
-        sessionDesc.defaultMatrixLayoutMode = SLANG_MATRIX_LAYOUT_COLUMN_MAJOR;
-
-        // Slang preprocessor macros. The macro descs hold raw c_str pointers into
-        // params.Defines, which lives for this compile call, so no local copy is needed.
-        std::vector<slang::PreprocessorMacroDesc> macros;
-        macros.reserve(params.Defines.size());
-        for (const auto& def : params.Defines) {
-            macros.push_back({def.Name.c_str(), def.Value.c_str()});
-        }
-        if (!macros.empty()) {
-            sessionDesc.preprocessorMacros     = macros.data();
-            sessionDesc.preprocessorMacroCount = static_cast<SlangInt>(macros.size());
-        }
-
+        std::string diagnostics;
         slang::ISession* session = nullptr;
-        if (SLANG_FAILED(globalSession->createSession(sessionDesc, &session)) || !session) {
-            spdlog::error("Slang: failed to create compile session");
+        auto compiledOpt = slang_compile::CompileSlangProgram(
+            globalSession, SLANG_WGSL, combined, params.Defines,
+            diagnostics, session, vertexEntryPoint, fragmentEntryPoint);
+        if (!diagnostics.empty()) {
+            spdlog::warn("Slang diagnostics:\n{}", diagnostics);
+        }
+        // Hold any created session alive to avoid the corrupt-free crash, whether
+        // or not compilation succeeded (session is null if none could be created).
+        slangCompileSession = session;
+        if (!compiledOpt.has_value()) {
+            spdlog::error("Slang: WGSL compilation failed");
             return false;
         }
 
-        ISlangBlob* diagBlob = nullptr;
+        auto& compiled = compiledOpt.value();
 
-        slang::IModule* module = session->loadModuleFromSourceString(
-            "shader", "shader.slang", combined.c_str(), &diagBlob);
-        if (diagBlob) {
-            spdlog::warn("Slang diagnostics:\n{}",
-                static_cast<const char*>(diagBlob->getBufferPointer()));
-            diagBlob->release();
-            diagBlob = nullptr;
-        }
-        if (!module) {
-            spdlog::error("Slang: shader module load failed");
-            slangCompileSession = session;  // hold to avoid corrupt-free crash
-            return false;
-        }
-        // Both entry points live in the single Slang module source.
-        // Always search for both; Slang returns null non-fatally if one is absent.
-        slang::IEntryPoint* vertEP = nullptr;
-        slang::IEntryPoint* fragEP = nullptr;
-        module->findAndCheckEntryPoint(
-            vertexEntryPoint.c_str(), SLANG_STAGE_VERTEX, &vertEP, &diagBlob);
-        if (diagBlob) { diagBlob->release(); diagBlob = nullptr; }
-        module->findAndCheckEntryPoint(
-            fragmentEntryPoint.c_str(), SLANG_STAGE_FRAGMENT, &fragEP, &diagBlob);
-        if (diagBlob) { diagBlob->release(); diagBlob = nullptr; }
-        std::vector<slang::IComponentType*> comps;
-        comps.push_back(module);
-        if (vertEP) comps.push_back(vertEP);
-        if (fragEP) comps.push_back(fragEP);
+        pipelineLayoutDescriptor = reflectLayout(compiled.Linked);
 
-        slang::IComponentType* composite = nullptr;
-        session->createCompositeComponentType(
-            comps.data(), static_cast<SlangInt>(comps.size()), &composite, &diagBlob);
-        if (diagBlob) { diagBlob->release(); diagBlob = nullptr; }
-
-        slang::IComponentType* linked = nullptr;
-        if (composite) {
-            composite->link(&linked, &diagBlob);
-            if (diagBlob) { diagBlob->release(); diagBlob = nullptr; }
-            composite->release();
-        }
-
-        if (!linked) {
-            spdlog::error("Slang: shader link failed");
-            if (vertEP) vertEP->release();
-            if (fragEP) fragEP->release();
-            module->release();
-            slangCompileSession = session;  // hold to avoid corrupt-free crash
-            return false;
-        }
-
-        pipelineLayoutDescriptor = reflectLayout(linked);
-
-        // Entry point indices in the composite: module is comp[0], vertEP is next, fragEP after
-        int epIdx          = 0;
-        int vertEPCompIdx  = vertEP ? epIdx++ : -1;
-        int fragEPCompIdx  = fragEP ? epIdx++ : -1;
-
-        auto extractWGSL = [&](int compEPIdx, const char* label) -> WGPUShaderModule {
-            ISlangBlob* codeBlob = nullptr;
-            if (SLANG_FAILED(linked->getEntryPointCode(compEPIdx, 0, &codeBlob, &diagBlob))
-                    || !codeBlob) {
-                if (diagBlob) {
-                    spdlog::error("Slang WGSL gen failed ({}): {}", label,
-                                  static_cast<const char*>(diagBlob->getBufferPointer()));
-                    diagBlob->release(); diagBlob = nullptr;
-                }
+        auto makeModule = [&](ISlangBlob* codeBlob, const char* label) -> WGPUShaderModule {
+            if (!codeBlob) {
+                spdlog::error("Slang WGSL gen failed ({})", label);
                 return nullptr;
             }
-            if (diagBlob) { diagBlob->release(); diagBlob = nullptr; }
             const char* wgsl = static_cast<const char*>(codeBlob->getBufferPointer());
-            WGPUShaderModule mod = createWGSLModule(device, wgsl, label);
-            codeBlob->release();
-            return mod;
+            return createWGSLModule(device, wgsl, label);
         };
 
-        if (vertEPCompIdx >= 0) vertexModule   = extractWGSL(vertEPCompIdx, "vertex");
-        if (fragEPCompIdx >= 0) fragmentModule  = extractWGSL(fragEPCompIdx, "fragment");
+        if (compiled.VertexBlob)   vertexModule   = makeModule(compiled.VertexBlob, "vertex");
+        if (compiled.FragmentBlob) fragmentModule = makeModule(compiled.FragmentBlob, "fragment");
 
-        linked->release();
-        if (vertEP) vertEP->release();
-        if (fragEP) fragEP->release();
-        module->release();
-        // Slang 2026.8.1 bug: session->release() triggers "free(): corrupted unsorted
-        // chunks" for shaders that generate std140 matrix wrapper types in WGSL.
-        // Keep the session alive; the OS reclaims memory at program exit. Note this
-        // leaks one ISession per shader for the lifetime of the process.
-        // TODO(slang>2026.8.1): re-test session->release(); currently crashes / corrupts
-        // heap in 2026.8.1.
-        slangCompileSession = session;
+        if (compiled.VertexBlob)   compiled.VertexBlob->release();
+        if (compiled.FragmentBlob) compiled.FragmentBlob->release();
+        compiled.Linked->release();
 
         return vertexModule != nullptr;
     }
