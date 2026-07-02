@@ -15,7 +15,52 @@
 #include <stdexcept>
 #include <vector>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 namespace OZZ::rendering::webgpu {
+
+    namespace {
+        // Build a WGPUSurface from platform-native window handles. Moved here from the
+        // engine's SDL window so all Dawn/WebGPU surface construction lives in the backend.
+        WGPUSurface CreateSurfaceFromNativeHandles(WGPUInstance instance,
+                                                   const NativeWindowHandles& handles) {
+            WGPUSurfaceDescriptor surfDesc = {};
+
+            switch (handles.Platform) {
+#ifdef _WIN32
+                case NativeWindowHandles::Platform::Win32: {
+                    WGPUSurfaceSourceWindowsHWND hwndDesc = {};
+                    hwndDesc.chain.sType = WGPUSType_SurfaceSourceWindowsHWND;
+                    // Prefer the provided Display as HINSTANCE; fall back to GetModuleHandle.
+                    hwndDesc.hinstance   = handles.Display ? handles.Display : GetModuleHandle(nullptr);
+                    hwndDesc.hwnd        = handles.Window;
+                    surfDesc.nextInChain = &hwndDesc.chain;
+                    return wgpuInstanceCreateSurface(instance, &surfDesc);
+                }
+#endif
+                case NativeWindowHandles::Platform::Wayland: {
+                    WGPUSurfaceSourceWaylandSurface wlDesc = {};
+                    wlDesc.chain.sType = WGPUSType_SurfaceSourceWaylandSurface;
+                    wlDesc.display     = handles.Display;
+                    wlDesc.surface     = handles.Window;
+                    surfDesc.nextInChain = &wlDesc.chain;
+                    return wgpuInstanceCreateSurface(instance, &surfDesc);
+                }
+                case NativeWindowHandles::Platform::X11: {
+                    WGPUSurfaceSourceXlibWindow xlibDesc = {};
+                    xlibDesc.chain.sType = WGPUSType_SurfaceSourceXlibWindow;
+                    xlibDesc.display     = handles.Display;
+                    xlibDesc.window      = handles.WindowId;
+                    surfDesc.nextInChain = &xlibDesc.chain;
+                    return wgpuInstanceCreateSurface(instance, &surfDesc);
+                }
+                default:
+                    return nullptr;
+            }
+        }
+    } // namespace
 
     // -------------------------------------------------------------------------
     // Constructor / destructor
@@ -92,8 +137,16 @@ namespace OZZ::rendering::webgpu {
         instance = wgpuCreateInstance(&instanceDesc);
         if (!instance) throw std::runtime_error("Failed to create WebGPU instance");
 
-        // Surface — delegate to PlatformContext (stays backend-agnostic for Emscripten compatibility)
-        if (!platformContext.CreateSurfaceFunction(&instance, &surface) || !surface)
+        // Surface — the WebGPU backend owns surface construction. The engine only supplies
+        // platform-native window handles via GetNativeWindowHandlesFunction; we build the
+        // WGPUSurfaceDescriptor chain here.
+        if (!platformContext.GetNativeWindowHandlesFunction)
+            throw std::runtime_error("WebGPU backend requires PlatformContext::GetNativeWindowHandlesFunction");
+        const NativeWindowHandles nativeHandles = platformContext.GetNativeWindowHandlesFunction();
+        if (nativeHandles.Platform == NativeWindowHandles::Platform::None)
+            throw std::runtime_error("WebGPU surface: no native window handles available for this platform");
+        surface = CreateSurfaceFromNativeHandles(instance, nativeHandles);
+        if (!surface)
             throw std::runtime_error("Failed to create WebGPU surface");
 
         // Adapter (synchronous in Dawn's native backend)

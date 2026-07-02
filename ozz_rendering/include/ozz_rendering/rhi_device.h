@@ -7,6 +7,7 @@
 #include "rhi_backend.h"
 #include "rhi_shader.h"
 
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <set>
@@ -26,6 +27,15 @@
 
 namespace OZZ::rendering {
 
+    // Native window handles for backends that construct their own surface (WebGPU).
+    struct NativeWindowHandles {
+        enum class Platform { None, Win32, Wayland, X11 } Platform {Platform::None};
+        void*    Display {nullptr};  // HINSTANCE / wl_display* / X11 Display*
+        void*    Window  {nullptr};  // HWND / wl_surface* / unused for X11
+        uint64_t WindowId {0};       // X11 Window id
+        // Emscripten: add a Canvas selector variant when web builds are wired up.
+    };
+
     struct PlatformContext {
         std::string AppName {"ozz_rendering_app"};
         std::tuple<int, int, int, int> AppVersion {1, 0, 0, 0};
@@ -34,9 +44,14 @@ namespace OZZ::rendering {
 
         std::vector<std::string> RequiredInstanceExtensions;
         std::function<std::pair<int, int>()> GetWindowFramebufferSizeFunction {};
-        // CreateSurfaceFunction takes opaque pointers (instance, surface_out) to remain backend-agnostic.
-        // For Vulkan: instance is VkInstance, surface_out is VkSurfaceKHR*
+        // CreateSurfaceFunction takes opaque pointers (instance, surface_out).
+        // Vulkan-only: instance is VkInstance, surface_out is VkSurfaceKHR*.
+        // The WebGPU backend does not use this; it constructs its surface from
+        // GetNativeWindowHandlesFunction instead.
         std::function<bool(void*, void*)> CreateSurfaceFunction {};
+        // Required by the WebGPU backend, which builds its own WGPUSurface from these
+        // native handles. Vulkan ignores it.
+        std::function<NativeWindowHandles()> GetNativeWindowHandlesFunction {};
     };
 
     struct RHIInitParams {
