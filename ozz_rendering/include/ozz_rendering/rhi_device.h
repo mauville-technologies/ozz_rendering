@@ -104,6 +104,11 @@ namespace OZZ::rendering {
         uint32_t frameIndex; // frame-in-flight index - internal only
     };
 
+    // Thread safety: resource creation/update/free (buffers, textures, shaders,
+    // descriptor sets and layouts) may be called from any thread, including
+    // concurrently with frame recording. Frame-recording methods (BeginFrame
+    // through SubmitAndPresentFrame, render passes, state/bind calls, draws)
+    // must be called from one thread at a time.
     class RHIDevice {
     public:
         virtual ~RHIDevice() = default;

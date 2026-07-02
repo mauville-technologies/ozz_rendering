@@ -123,6 +123,19 @@ namespace OZZ::rendering::webgpu {
         void configureSurface();
         void createDepthTexture();
         void registerShaderLayouts(RHIShaderHandle handle, RHIShaderWebGPU& shader);
+
+        // Unlocked implementations. Public methods take apiMutex (a plain std::mutex) and
+        // delegate here; internal callers that already hold the lock (or run during
+        // single-threaded construction) call the *Impl form directly. This avoids
+        // re-locking a non-recursive mutex on public-to-public call chains, e.g.
+        // BeginFrame -> Free/CreateTexture, and CreateShader -> registerShaderLayouts ->
+        // CreatePipelineLayout -> CreateDescriptorSetLayout.
+        RHITextureHandle createTextureImpl(TextureDescriptor&& descriptor);
+        void freeTextureImpl(RHITextureHandle handle);
+        std::pair<RHIPipelineLayoutHandle, std::set<RHIDescriptorSetLayoutHandle>>
+        createPipelineLayoutImpl(const RHIPipelineLayoutDescriptor& pipelineLayoutDescriptor);
+        RHIDescriptorSetLayoutHandle
+        createDescriptorSetLayoutImpl(const RHIDescriptorSetLayoutDescriptor& descriptorSetLayoutDescriptor);
         // Builds a WGPUPipelineLayout from a set of already-created descriptor-set-layout
         // handles (in set-index order) plus the reflected descriptor (for push constants).
         // Shared by CreatePipelineLayout and the in-place rebuild after a BGL is mutated.
@@ -146,13 +159,15 @@ namespace OZZ::rendering::webgpu {
         bool flushPendingDrawState();
 
     private:
-        // Dawn (native/Vulkan backend) is not safe to call concurrently from multiple
-        // threads on the same device/queue. The contract of this device is that resource
-        // creation APIs (CreateBuffer/UpdateBuffer/CreateTexture/etc.) may be called from
-        // a non-render thread while a frame is being recorded on the render thread —
-        // without serializing access, this races inside Dawn's internal Vulkan backend
-        // and segfaults. Every public entry point below takes this lock for its duration.
-        mutable std::recursive_mutex apiMutex;
+        // Dawn device calls are not thread-safe on the same device/queue, so this backend
+        // serializes EVERYTHING through this single mutex: every public entry point takes
+        // it for its full duration. The RHIDevice thread-safety contract (resource
+        // creation/update/free may run concurrently with frame recording) is therefore
+        // satisfied here by mutual exclusion rather than by real parallelism — unlike the
+        // Vulkan backend, which uses fine-grained locks and genuinely creates resources in
+        // parallel. This is a non-recursive std::mutex: no locked path may lock again, so
+        // all public-to-public call chains route through the unlocked *Impl helpers.
+        mutable std::mutex apiMutex;
 
         PlatformContext platformContext;
 

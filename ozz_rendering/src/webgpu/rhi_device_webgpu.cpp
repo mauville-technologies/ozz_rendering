@@ -286,7 +286,9 @@ namespace OZZ::rendering::webgpu {
         depthDesc.Height = swapchainHeight;
         depthDesc.Format = TextureFormat::D32Float;
         depthDesc.Usage  = TextureUsage::DepthAttachment;
-        depthTextureHandle = CreateTexture(std::move(depthDesc));
+        // Unlocked path: called from initialize() (single-threaded construction) and from
+        // BeginFrame() (already holding apiMutex). Use the Impl to avoid re-locking.
+        depthTextureHandle = createTextureImpl(std::move(depthDesc));
     }
 
     // -------------------------------------------------------------------------
@@ -294,7 +296,7 @@ namespace OZZ::rendering::webgpu {
     // -------------------------------------------------------------------------
 
     RHIFrameContext RHIDeviceWebGPU::BeginFrame() {
-        std::lock_guard<std::recursive_mutex> lock(apiMutex);
+        std::lock_guard<std::mutex> lock(apiMutex);
         pushConstantCursor = 0;
         auto [w, h] = platformContext.GetWindowFramebufferSizeFunction();
         uint32_t newW = static_cast<uint32_t>(w);
@@ -303,8 +305,9 @@ namespace OZZ::rendering::webgpu {
             swapchainWidth  = newW;
             swapchainHeight = newH;
             configureSurface();
-            FreeTexture(depthTextureHandle);
-            createDepthTexture();
+            // Already holding apiMutex: use the unlocked paths to avoid re-locking.
+            freeTextureImpl(depthTextureHandle);
+            createDepthTexture(); // internally uses createTextureImpl (unlocked)
         }
 
         // Acquire current surface texture
@@ -338,7 +341,7 @@ namespace OZZ::rendering::webgpu {
     }
 
     void RHIDeviceWebGPU::SubmitAndPresentFrame(RHIFrameContext&& frameContext) {
-        std::lock_guard<std::recursive_mutex> lock(apiMutex);
+        std::lock_guard<std::mutex> lock(apiMutex);
         // End any open render pass
         if (activeRenderPassEncoder) {
             wgpuRenderPassEncoderEnd(activeRenderPassEncoder);
@@ -387,7 +390,7 @@ namespace OZZ::rendering::webgpu {
     }
 
     std::pair<uint32_t, uint32_t> RHIDeviceWebGPU::GetSwapchainExtent() const {
-        std::lock_guard<std::recursive_mutex> lock(apiMutex);
+        std::lock_guard<std::mutex> lock(apiMutex);
         return {swapchainWidth, swapchainHeight};
     }
 
@@ -397,7 +400,7 @@ namespace OZZ::rendering::webgpu {
 
     void RHIDeviceWebGPU::BeginRenderPass(const RHIFrameContext& frameContext,
                                            const RenderPassDescriptor& rpDesc) {
-        std::lock_guard<std::recursive_mutex> lock(apiMutex);
+        std::lock_guard<std::mutex> lock(apiMutex);
         if (!activeEncoder) return;
 
         // Reset active pass formats; they will be set below from the actual attachments.
@@ -474,7 +477,7 @@ namespace OZZ::rendering::webgpu {
     }
 
     void RHIDeviceWebGPU::EndRenderPass(const RHIFrameContext&) {
-        std::lock_guard<std::recursive_mutex> lock(apiMutex);
+        std::lock_guard<std::mutex> lock(apiMutex);
         if (activeRenderPassEncoder) {
             wgpuRenderPassEncoderEnd(activeRenderPassEncoder);
             wgpuRenderPassEncoderRelease(activeRenderPassEncoder);
@@ -498,7 +501,7 @@ namespace OZZ::rendering::webgpu {
     // -------------------------------------------------------------------------
 
     void RHIDeviceWebGPU::SetViewport(const RHIFrameContext&, const Viewport& vp) {
-        std::lock_guard<std::recursive_mutex> lock(apiMutex);
+        std::lock_guard<std::mutex> lock(apiMutex);
         if (!activeRenderPassEncoder) return;
         // Clamp to the pass attachment extent: mid-resize the engine can send a
         // rect sized for the previous frame, and Dawn invalidates the whole
@@ -516,7 +519,7 @@ namespace OZZ::rendering::webgpu {
     }
 
     void RHIDeviceWebGPU::SetScissor(const RHIFrameContext&, const Scissor& sc) {
-        std::lock_guard<std::recursive_mutex> lock(apiMutex);
+        std::lock_guard<std::mutex> lock(apiMutex);
         if (!activeRenderPassEncoder) return;
         // Same clamp rationale as SetViewport.
         const uint32_t x = std::min(static_cast<uint32_t>(std::max(sc.X, 0)), activePassWidth);
@@ -528,18 +531,18 @@ namespace OZZ::rendering::webgpu {
 
     void RHIDeviceWebGPU::SetGraphicsState(const RHIFrameContext&,
                                             const GraphicsStateDescriptor& state) {
-        std::lock_guard<std::recursive_mutex> lock(apiMutex);
+        std::lock_guard<std::mutex> lock(apiMutex);
         pendingState     = state;
         stateSetThisPass = true;
     }
 
     void RHIDeviceWebGPU::BindShader(const RHIFrameContext&, const RHIShaderHandle& handle) {
-        std::lock_guard<std::recursive_mutex> lock(apiMutex);
+        std::lock_guard<std::mutex> lock(apiMutex);
         pendingShaderHandle = handle;
     }
 
     void RHIDeviceWebGPU::BindBuffer(const RHIFrameContext&, const RHIBufferHandle& handle) {
-        std::lock_guard<std::recursive_mutex> lock(apiMutex);
+        std::lock_guard<std::mutex> lock(apiMutex);
         auto* buf = bufferPool.Get(handle);
         if (!buf) return;
         if (static_cast<uint8_t>(buf->Usage) & static_cast<uint8_t>(BufferUsage::VertexBuffer))
@@ -556,7 +559,7 @@ namespace OZZ::rendering::webgpu {
                                             uint32_t offset,
                                             uint32_t size,
                                             const void* data) {
-        std::lock_guard<std::recursive_mutex> lock(apiMutex);
+        std::lock_guard<std::mutex> lock(apiMutex);
         if (!data || size == 0 || offset + size > PushConstantSlotSize) return;
         if (pushConstantCursor >= PushConstantSlotsPerFrame) {
             spdlog::error("WebGPU: push constant slots exhausted for this frame ({} draws)",
@@ -574,7 +577,7 @@ namespace OZZ::rendering::webgpu {
                                              RHIPipelineLayoutHandle,
                                              uint32_t setIndex,
                                              RHIDescriptorSetHandle descriptorSetHandle) {
-        std::lock_guard<std::recursive_mutex> lock(apiMutex);
+        std::lock_guard<std::mutex> lock(apiMutex);
         if (setIndex < MaxBoundDescriptorSets)
             pendingDescriptorSets[setIndex] = descriptorSetHandle;
     }
@@ -773,7 +776,7 @@ namespace OZZ::rendering::webgpu {
     void RHIDeviceWebGPU::Draw(const RHIFrameContext&,
                                 uint32_t vertexCount, uint32_t instanceCount,
                                 uint32_t firstVertex, uint32_t firstInstance) {
-        std::lock_guard<std::recursive_mutex> lock(apiMutex);
+        std::lock_guard<std::mutex> lock(apiMutex);
         if (!flushPendingDrawState()) return;
 
         wgpuRenderPassEncoderDraw(activeRenderPassEncoder, vertexCount, instanceCount,
@@ -784,7 +787,7 @@ namespace OZZ::rendering::webgpu {
                                        uint32_t indexCount, uint32_t instanceCount,
                                        uint32_t firstIndex, int32_t vertexOffset,
                                        uint32_t firstInstance) {
-        std::lock_guard<std::recursive_mutex> lock(apiMutex);
+        std::lock_guard<std::mutex> lock(apiMutex);
         if (!flushPendingDrawState()) return;
 
         if (hasPendingIndexBuffer && pendingIndexBuffer.IsValid()) {
@@ -802,7 +805,7 @@ namespace OZZ::rendering::webgpu {
     // -------------------------------------------------------------------------
 
     RHIDescriptorSetHandle RHIDeviceWebGPU::CreateDescriptorSet(RHIDescriptorSetLayoutHandle layoutHandle) {
-        std::lock_guard<std::recursive_mutex> lock(apiMutex);
+        std::lock_guard<std::mutex> lock(apiMutex);
         DescriptorSetData ds {};
         ds.layoutHandle = layoutHandle;
         return descriptorSetPool.Allocate(std::move(ds));
@@ -810,7 +813,7 @@ namespace OZZ::rendering::webgpu {
 
     void RHIDeviceWebGPU::UpdateDescriptorSet(RHIDescriptorSetHandle handle,
                                                std::span<const RHIDescriptorWrite> writes) {
-        std::lock_guard<std::recursive_mutex> lock(apiMutex);
+        std::lock_guard<std::mutex> lock(apiMutex);
         auto* ds = descriptorSetPool.Get(handle);
         if (!ds) return;
 
@@ -916,7 +919,7 @@ namespace OZZ::rendering::webgpu {
     }
 
     void RHIDeviceWebGPU::FreeDescriptorSet(RHIDescriptorSetHandle handle) {
-        std::lock_guard<std::recursive_mutex> lock(apiMutex);
+        std::lock_guard<std::mutex> lock(apiMutex);
         descriptorSetPool.Free(handle);
     }
 
@@ -925,7 +928,13 @@ namespace OZZ::rendering::webgpu {
     // -------------------------------------------------------------------------
 
     RHITextureHandle RHIDeviceWebGPU::CreateTexture(TextureDescriptor&& descriptor) {
-        std::lock_guard<std::recursive_mutex> lock(apiMutex);
+        std::lock_guard<std::mutex> lock(apiMutex);
+        return createTextureImpl(std::move(descriptor));
+    }
+
+    RHITextureHandle RHIDeviceWebGPU::createTextureImpl(TextureDescriptor&& descriptor) {
+        // Unlocked: callers hold apiMutex (public CreateTexture, BeginFrame's depth
+        // recreate) or run single-threaded during construction (createDepthTexture).
         WGPUTextureDescriptor desc {};
         desc.usage           = ToWebGPU(descriptor.Usage);
         desc.dimension       = WGPUTextureDimension_2D;
@@ -973,7 +982,7 @@ namespace OZZ::rendering::webgpu {
 
     void RHIDeviceWebGPU::UpdateTexture(const RHITextureHandle& handle,
                                          const void* data, size_t size) {
-        std::lock_guard<std::recursive_mutex> lock(apiMutex);
+        std::lock_guard<std::mutex> lock(apiMutex);
         auto* tex = texturePool.Get(handle);
         if (!tex || !tex->Texture) return;
 
@@ -995,7 +1004,12 @@ namespace OZZ::rendering::webgpu {
     }
 
     void RHIDeviceWebGPU::FreeTexture(RHITextureHandle handle) {
-        std::lock_guard<std::recursive_mutex> lock(apiMutex);
+        std::lock_guard<std::mutex> lock(apiMutex);
+        freeTextureImpl(handle);
+    }
+
+    void RHIDeviceWebGPU::freeTextureImpl(RHITextureHandle handle) {
+        // Unlocked: callers hold apiMutex (public FreeTexture, BeginFrame's depth recreate).
         texturePool.Free(handle);
     }
 
@@ -1004,13 +1018,14 @@ namespace OZZ::rendering::webgpu {
     // -------------------------------------------------------------------------
 
     void RHIDeviceWebGPU::registerShaderLayouts(RHIShaderHandle handle, RHIShaderWebGPU& shader) {
-        auto [plHandle, dsHandles] = CreatePipelineLayout(shader.pipelineLayoutDescriptor);
+        // Called from CreateShader while holding apiMutex — must use the unlocked Impl.
+        auto [plHandle, dsHandles] = createPipelineLayoutImpl(shader.pipelineLayoutDescriptor);
         shader.pipelineLayoutHandle = plHandle;
         shader.descriptorSetLayoutHandles.assign(dsHandles.begin(), dsHandles.end());
     }
 
     RHIShaderHandle RHIDeviceWebGPU::CreateShader(ShaderFileParams&& fileParams) {
-        std::lock_guard<std::recursive_mutex> lock(apiMutex);
+        std::lock_guard<std::mutex> lock(apiMutex);
         RHIShaderWebGPU shader(device, slangSession, std::move(fileParams));
         if (!shader.IsValid()) return RHIShaderHandle::Null();
         RHIShaderHandle handle = shaderPool.Allocate(std::move(shader));
@@ -1020,7 +1035,7 @@ namespace OZZ::rendering::webgpu {
     }
 
     RHIShaderHandle RHIDeviceWebGPU::CreateShader(ShaderSourceParams&& sourceParams) {
-        std::lock_guard<std::recursive_mutex> lock(apiMutex);
+        std::lock_guard<std::mutex> lock(apiMutex);
         RHIShaderWebGPU shader(device, slangSession, std::move(sourceParams));
         if (!shader.IsValid()) return RHIShaderHandle::Null();
         RHIShaderHandle handle = shaderPool.Allocate(std::move(shader));
@@ -1030,32 +1045,39 @@ namespace OZZ::rendering::webgpu {
     }
 
     void RHIDeviceWebGPU::FreeShader(const RHIShaderHandle& handle) {
-        std::lock_guard<std::recursive_mutex> lock(apiMutex);
+        std::lock_guard<std::mutex> lock(apiMutex);
         shaderPool.Free(handle);
     }
 
     RHIPipelineLayoutDescriptor RHIDeviceWebGPU::GetShaderPipelineLayout(const RHIShaderHandle& handle) {
-        std::lock_guard<std::recursive_mutex> lock(apiMutex);
+        std::lock_guard<std::mutex> lock(apiMutex);
         auto* s = shaderPool.Get(handle);
         return s ? s->pipelineLayoutDescriptor : RHIPipelineLayoutDescriptor{};
     }
 
     RHIPipelineLayoutHandle RHIDeviceWebGPU::GetShaderPipelineLayoutHandle(const RHIShaderHandle& handle) {
-        std::lock_guard<std::recursive_mutex> lock(apiMutex);
+        std::lock_guard<std::mutex> lock(apiMutex);
         auto* s = shaderPool.Get(handle);
         return s ? s->pipelineLayoutHandle : RHIPipelineLayoutHandle::Null();
     }
 
     std::vector<RHIDescriptorSetLayoutHandle>
     RHIDeviceWebGPU::GetShaderDescriptorSetLayoutHandles(const RHIShaderHandle& handle) {
-        std::lock_guard<std::recursive_mutex> lock(apiMutex);
+        std::lock_guard<std::mutex> lock(apiMutex);
         auto* s = shaderPool.Get(handle);
         return s ? s->descriptorSetLayoutHandles : std::vector<RHIDescriptorSetLayoutHandle>{};
     }
 
     std::pair<RHIPipelineLayoutHandle, std::set<RHIDescriptorSetLayoutHandle>>
     RHIDeviceWebGPU::CreatePipelineLayout(const RHIPipelineLayoutDescriptor& desc) {
-        std::lock_guard<std::recursive_mutex> lock(apiMutex);
+        std::lock_guard<std::mutex> lock(apiMutex);
+        return createPipelineLayoutImpl(desc);
+    }
+
+    std::pair<RHIPipelineLayoutHandle, std::set<RHIDescriptorSetLayoutHandle>>
+    RHIDeviceWebGPU::createPipelineLayoutImpl(const RHIPipelineLayoutDescriptor& desc) {
+        // Unlocked: callers hold apiMutex (public CreatePipelineLayout, or CreateShader ->
+        // registerShaderLayouts). Delegates to createDescriptorSetLayoutImpl (also unlocked).
         std::set<RHIDescriptorSetLayoutHandle> outHandles;
         // Ordered list of the DSL handles as they map to bind-group slots 0..PushConstantSet-1.
         std::vector<RHIDescriptorSetLayoutHandle> orderedHandles;
@@ -1066,7 +1088,7 @@ namespace OZZ::rendering::webgpu {
         // dynamic-offset pushConstantBG the draw calls actually bind there, causing WebGPU
         // to reject the pipeline ("does not match layout... at group index 3").
         for (uint32_t i = 0; i < desc.SetCount && i < PushConstantSet; i++) {
-            RHIDescriptorSetLayoutHandle h = CreateDescriptorSetLayout(desc.Sets[i]);
+            RHIDescriptorSetLayoutHandle h = createDescriptorSetLayoutImpl(desc.Sets[i]);
             outHandles.insert(h);
             orderedHandles.push_back(h);
         }
@@ -1077,7 +1099,7 @@ namespace OZZ::rendering::webgpu {
         if (hasPushConstants && pushConstantBGL) {
             while (orderedHandles.size() < PushConstantSet) {
                 const RHIDescriptorSetLayoutDescriptor emptySet {};
-                auto h = CreateDescriptorSetLayout(emptySet);
+                auto h = createDescriptorSetLayoutImpl(emptySet);
                 outHandles.insert(h);
                 orderedHandles.push_back(h);
             }
@@ -1235,8 +1257,14 @@ namespace OZZ::rendering::webgpu {
 
     RHIDescriptorSetLayoutHandle
     RHIDeviceWebGPU::CreateDescriptorSetLayout(const RHIDescriptorSetLayoutDescriptor& desc) {
-        std::lock_guard<std::recursive_mutex> lock(apiMutex);
+        std::lock_guard<std::mutex> lock(apiMutex);
+        return createDescriptorSetLayoutImpl(desc);
+    }
 
+    RHIDescriptorSetLayoutHandle
+    RHIDeviceWebGPU::createDescriptorSetLayoutImpl(const RHIDescriptorSetLayoutDescriptor& desc) {
+        // Unlocked: callers hold apiMutex (public CreateDescriptorSetLayout, or
+        // createPipelineLayoutImpl).
         BindGroupLayoutData data {};
         data.sourceDesc = desc;
         data.bgl = buildBindGroupLayoutObject(desc, data.depthResolved);
@@ -1249,7 +1277,7 @@ namespace OZZ::rendering::webgpu {
     // -------------------------------------------------------------------------
 
     RHIBufferHandle RHIDeviceWebGPU::CreateBuffer(BufferDescriptor&& desc) {
-        std::lock_guard<std::recursive_mutex> lock(apiMutex);
+        std::lock_guard<std::mutex> lock(apiMutex);
         WGPUBufferDescriptor wgpuDesc {};
         wgpuDesc.size  = desc.Size;
         wgpuDesc.usage = ToWebGPU(desc.Usage) | WGPUBufferUsage_CopyDst; // CopyDst for WriteBuffer
@@ -1267,14 +1295,14 @@ namespace OZZ::rendering::webgpu {
 
     void RHIDeviceWebGPU::UpdateBuffer(const RHIBufferHandle& handle,
                                         const void* data, size_t size, size_t offset) {
-        std::lock_guard<std::recursive_mutex> lock(apiMutex);
+        std::lock_guard<std::mutex> lock(apiMutex);
         auto* buf = bufferPool.Get(handle);
         if (!buf || !buf->Buffer) return;
         wgpuQueueWriteBuffer(queue, buf->Buffer, offset, data, size);
     }
 
     void RHIDeviceWebGPU::FreeBuffer(const RHIBufferHandle& handle) {
-        std::lock_guard<std::recursive_mutex> lock(apiMutex);
+        std::lock_guard<std::mutex> lock(apiMutex);
         bufferPool.Free(handle);
     }
 

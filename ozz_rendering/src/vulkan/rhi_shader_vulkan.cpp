@@ -5,6 +5,7 @@
 #include "rhi_shader_vulkan.h"
 
 #include <fstream>
+#include <mutex>
 
 #include "spdlog/spdlog.h"
 #include <glslang/Public/ResourceLimits.h>
@@ -16,6 +17,22 @@
 #include <ozz_rendering/profiling.h>
 
 namespace OZZ::rendering::vk {
+    namespace {
+        // glslang::InitializeProcess() sets up process-wide global state (the SPIR-V
+        // pool allocator etc.) and must run exactly once before any TShader/TProgram
+        // compile. Per-thread compilation of separate TShader/TProgram objects is
+        // thread-safe once the process is initialized. CreateShader may be called from
+        // any thread (see RHIDevice thread-safety contract), so guard the one-time init
+        // with std::call_once. We deliberately never call glslang::FinalizeProcess() at
+        // per-compile scope: the old Initialize/Finalize-per-compile pairing both broke
+        // repeated compiles and raced under concurrency (one thread tearing down the
+        // pool mid-parse on another). The OS reclaims the process pool at exit.
+        std::once_flag g_glslangInitFlag;
+        void ensureGlslangInitialized() {
+            std::call_once(g_glslangInitFlag, [] { glslang::InitializeProcess(); });
+        }
+    } // namespace
+
     RHIShaderVulkan::RHIShaderVulkan(VkDevice device, ShaderFileParams&& shaderFiles) {
         OZZ_PROFILE_FUNCTION;
         // load files
@@ -104,9 +121,11 @@ namespace OZZ::rendering::vk {
         bHasGeometry = !shaderSources.Geometry.empty();
         pipelineLayoutDescriptor = ReflectPipelineLayoutDescriptor(compiledProgram);
 
-        if (!bIsSlang) {
-            glslang::FinalizeProcess();
-        }
+        // NOTE: glslang::FinalizeProcess() is intentionally NOT called here. glslang is
+        // initialized exactly once via ensureGlslangInitialized() (std::call_once) and
+        // left initialized for the process lifetime; finalizing per-compile is both
+        // incorrect for subsequent compiles and unsafe when CreateShader runs on
+        // multiple threads.
         bIsCompiled = true;
         return true;
     }
@@ -205,7 +224,8 @@ namespace OZZ::rendering::vk {
 
     std::optional<CompiledShaderProgram> RHIShaderVulkan::compileProgram(const ShaderSourceParams& shaderSources) {
         OZZ_PROFILE_FUNCTION;
-        glslang::InitializeProcess();
+        // One-time, thread-safe process init (see ensureGlslangInitialized above).
+        ensureGlslangInitialized();
 
         // vertex and fragment are mandatory
         if (shaderSources.Vertex.empty()) {

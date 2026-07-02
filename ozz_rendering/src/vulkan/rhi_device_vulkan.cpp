@@ -95,6 +95,9 @@ namespace OZZ::rendering::vk {
         })
         , descriptorSetResourcePool([this](VkDescriptorSet& set) {
             if (set != VK_NULL_HANDLE && descriptorPool != VK_NULL_HANDLE) {
+                // Pool free requires external synchronization on the shared descriptorPool,
+                // and must be serialized against vkUpdateDescriptorSets of the same set.
+                std::lock_guard lock(descriptorPoolMutex);
                 vkFreeDescriptorSets(device, descriptorPool, 1, &set);
                 set = VK_NULL_HANDLE;
             }
@@ -953,10 +956,16 @@ namespace OZZ::rendering::vk {
         }
 
         // Clear per-frame deletion queue now that the GPU has finished with this slot.
-        for (const auto& deletionFunc : perFrameDeletions[currentFrame]) {
+        // Swap the queue out under the lock so a concurrent Free* (on another thread)
+        // does not race the iterate/clear, then run the deletions with the lock released.
+        std::vector<std::function<void()>> deletions;
+        {
+            std::lock_guard lock(deletionQueueMutex);
+            deletions.swap(perFrameDeletions[currentFrame]);
+        }
+        for (const auto& deletionFunc : deletions) {
             deletionFunc();
         }
-        perFrameDeletions[currentFrame].clear();
 
         uint32_t imageIndex;
         VkResult acquireResult = vkAcquireNextImageKHR(device,
@@ -1627,9 +1636,13 @@ namespace OZZ::rendering::vk {
         };
 
         VkDescriptorSet set {VK_NULL_HANDLE};
-        if (const auto result = vkAllocateDescriptorSets(device, &allocInfo, &set); result != VK_SUCCESS) {
-            spdlog::error("Failed to allocate descriptor set. Error: {}", static_cast<int>(result));
-            return RHIDescriptorSetHandle::Null();
+        {
+            // Pool alloc requires external synchronization on the shared descriptorPool.
+            std::lock_guard lock(descriptorPoolMutex);
+            if (const auto result = vkAllocateDescriptorSets(device, &allocInfo, &set); result != VK_SUCCESS) {
+                spdlog::error("Failed to allocate descriptor set. Error: {}", static_cast<int>(result));
+                return RHIDescriptorSetHandle::Null();
+            }
         }
 
         return descriptorSetResourcePool.Allocate(std::move(set));
@@ -1720,10 +1733,18 @@ namespace OZZ::rendering::vk {
             }
         }
 
-        vkUpdateDescriptorSets(device, static_cast<uint32_t>(vkWrites.size()), vkWrites.data(), 0, nullptr);
+        // The real hazard is update-vs-free of the SAME descriptor set (per Vulkan spec,
+        // the set being written must be externally synchronized against its free). We
+        // serialize on descriptorPoolMutex — coarser than strictly required, but cheap
+        // and correct.
+        {
+            std::lock_guard lock(descriptorPoolMutex);
+            vkUpdateDescriptorSets(device, static_cast<uint32_t>(vkWrites.size()), vkWrites.data(), 0, nullptr);
+        }
     }
 
     void RHIDeviceVulkan::FreeDescriptorSet(RHIDescriptorSetHandle handle) {
+        std::lock_guard lock(deletionQueueMutex);
         perFrameDeletions[currentFrame].emplace_back([this, handle]() {
             descriptorSetResourcePool.Free(handle);
         });
@@ -1733,6 +1754,15 @@ namespace OZZ::rendering::vk {
     // === Resource Creation ===
     // ============================================================
 
+    // Thread safety: device-level vkCreate* calls used below (vkCreateImageView,
+    // vkCreateSampler, vkCreatePipelineLayout, vkCreateDescriptorSetLayout,
+    // vkCreateShadersEXT, and buffer/image creation via VMA) are thread-safe per the
+    // Vulkan spec — they do not mutate externally-visible shared state and require no
+    // external synchronization, so they are deliberately left unguarded. VMA itself is
+    // internally synchronized (VmaAllocatorCreateInfo.flags = 0). The only shared object
+    // requiring external synchronization on these paths is the single VkDescriptorPool,
+    // guarded by descriptorPoolMutex (see CreateDescriptorSet / UpdateDescriptorSet and
+    // the descriptorSetResourcePool free lambda).
     RHITextureHandle RHIDeviceVulkan::CreateTexture(TextureDescriptor&& descriptor) {
         OZZ_PROFILE_FUNCTION;
         VkImageCreateInfo imageCreateInfo {
@@ -1934,6 +1964,7 @@ namespace OZZ::rendering::vk {
 
     void RHIDeviceVulkan::FreeTexture(RHITextureHandle handle) {
         OZZ_PROFILE_FUNCTION;
+        std::lock_guard lock(deletionQueueMutex);
         perFrameDeletions[currentFrame].emplace_back([this, handle]() {
             texturePool.Free(handle);
         });
@@ -2158,6 +2189,7 @@ namespace OZZ::rendering::vk {
     }
 
     void RHIDeviceVulkan::FreeShader(const RHIShaderHandle& shaderHandle) {
+        std::lock_guard lock(deletionQueueMutex);
         perFrameDeletions[currentFrame].emplace_back([this, shaderHandle]() {
             shaderResourcePool.Free(shaderHandle);
         });
@@ -2247,7 +2279,7 @@ namespace OZZ::rendering::vk {
     }
 
     void RHIDeviceVulkan::FreeBuffer(const RHIBufferHandle& bufferHandle) {
-
+        std::lock_guard lock(deletionQueueMutex);
         perFrameDeletions[currentFrame].emplace_back([this, bufferHandle]() {
             bufferResourcePool.Free(bufferHandle);
         });

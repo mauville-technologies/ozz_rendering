@@ -184,6 +184,11 @@ namespace OZZ::rendering::vk {
         bool stateSetThisPass {false};
 
         std::array<std::vector<std::function<void()>>, MaxFramesInFlight> perFrameDeletions {};
+        // Guards perFrameDeletions: Free{Texture,Shader,Buffer,DescriptorSet} enqueue from
+        // any (creation) thread, while BeginFrame drains and clears the current frame's
+        // queue on the render thread. Without this, concurrent emplace_back vs iterate/clear
+        // on the same std::vector is a data race.
+        std::mutex deletionQueueMutex;
 
         /**
          * Vulkan Primitives
@@ -222,6 +227,13 @@ namespace OZZ::rendering::vk {
         VkCommandPool transientCommandBufferPool {VK_NULL_HANDLE};
         std::mutex graphicsQueueMutex;
         std::mutex transientCmdPoolMutex;
+        // Guards the single shared VkDescriptorPool: vkAllocateDescriptorSets and
+        // vkFreeDescriptorSets require external synchronization on the pool, and
+        // vkUpdateDescriptorSets writing a descriptor set must be externally
+        // synchronized against a concurrent free of that same set. We take this lock
+        // for the update as well (cheap, correctness-first): the real hazard is
+        // update-vs-free of the same set, which this serializes.
+        std::mutex descriptorPoolMutex;
 
         // resource pools
         ResourcePool<TextureTag, RHITextureVulkan> texturePool;
