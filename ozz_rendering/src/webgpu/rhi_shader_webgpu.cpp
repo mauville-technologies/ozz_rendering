@@ -389,8 +389,17 @@ namespace OZZ::rendering::webgpu {
                     // Buffer shapes:  SLANG_STRUCTURED_BUFFER(6), SLANG_BYTE_ADDRESS_BUFFER(7), etc.
                     bool isTexture = (baseShape >= SLANG_TEXTURE_1D && baseShape <= SLANG_TEXTURE_BUFFER)
                                   || baseShape == SLANG_TEXTURE_SUBPASS;
-                    (void)access;
-                    descType = isTexture ? DescriptorType::SampledImage : DescriptorType::StorageBuffer;
+                    if (isTexture) {
+                        descType = DescriptorType::SampledImage;
+                    } else {
+                        // WebGPU rejects read-write storage buffers visible to the vertex
+                        // stage; read-only ones are legal. Map read-only structured buffers
+                        // to ReadOnlyStorageBuffer (CreateDescriptorSetLayout emits
+                        // WGPUBufferBindingType_ReadOnlyStorage for it).
+                        descType = (access == SLANG_RESOURCE_ACCESS_READ)
+                                       ? DescriptorType::ReadOnlyStorageBuffer
+                                       : DescriptorType::StorageBuffer;
+                    }
                     break;
                 }
                 case slang::TypeReflection::Kind::SamplerState:
@@ -419,9 +428,25 @@ namespace OZZ::rendering::webgpu {
                                       slang::IGlobalSession* slangSession,
                                       ShaderFileParams&& params) {
         ShaderSourceParams src;
+        // Whole-module Slang file takes precedence: read it into ShaderSourceParams::Slang
+        // and forward Defines, skipping the vertex/fragment file-open requirements.
+        if (!params.Slang.empty()) {
+            std::ifstream f(params.Slang, std::ios::binary);
+            if (!f) {
+                spdlog::error("WebGPU: failed to open Slang shader file: {}", params.Slang.string());
+                return; // vertexModule stays null -> IsValid() == false
+            }
+            std::ostringstream ss;
+            ss << f.rdbuf();
+            src.Slang   = ss.str();
+            src.Defines = std::move(params.Defines);
+            compile(device, slangSession, std::move(src));
+            return;
+        }
         if (!params.Vertex.empty())   src.Vertex   = readFile(params.Vertex);
         if (!params.Fragment.empty()) src.Fragment = readFile(params.Fragment);
         if (!params.Geometry.empty()) src.Geometry = readFile(params.Geometry);
+        src.Defines = std::move(params.Defines);
         compile(device, slangSession, std::move(src));
     }
 
@@ -519,6 +544,18 @@ namespace OZZ::rendering::webgpu {
         // Slang defaults to row-major, which silently transposes every matrix read in
         // shader code (e.g. camera.proj/view, pc.model) unless overridden here.
         sessionDesc.defaultMatrixLayoutMode = SLANG_MATRIX_LAYOUT_COLUMN_MAJOR;
+
+        // Slang preprocessor macros. The macro descs hold raw c_str pointers into
+        // params.Defines, which lives for this compile call, so no local copy is needed.
+        std::vector<slang::PreprocessorMacroDesc> macros;
+        macros.reserve(params.Defines.size());
+        for (const auto& def : params.Defines) {
+            macros.push_back({def.Name.c_str(), def.Value.c_str()});
+        }
+        if (!macros.empty()) {
+            sessionDesc.preprocessorMacros     = macros.data();
+            sessionDesc.preprocessorMacroCount = static_cast<SlangInt>(macros.size());
+        }
 
         slang::ISession* session = nullptr;
         if (SLANG_FAILED(globalSession->createSession(sessionDesc, &session)) || !session) {

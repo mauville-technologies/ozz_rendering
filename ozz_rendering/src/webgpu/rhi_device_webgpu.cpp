@@ -9,6 +9,7 @@
 #include <slang.h>
 #include <spdlog/spdlog.h>
 
+#include <algorithm>
 #include <cassert>
 #include <cstring>
 #include <stdexcept>
@@ -36,8 +37,8 @@ namespace OZZ::rendering::webgpu {
         , pipelineLayoutPool([](WGPUPipelineLayout& pl) {
             if (pl) wgpuPipelineLayoutRelease(pl);
         })
-        , bindGroupLayoutPool([](WGPUBindGroupLayout& bgl) {
-            if (bgl) wgpuBindGroupLayoutRelease(bgl);
+        , bindGroupLayoutPool([](BindGroupLayoutData& data) {
+            if (data.bgl) wgpuBindGroupLayoutRelease(data.bgl);
         })
         , descriptorSetPool([](DescriptorSetData& ds) {
             if (ds.bindGroup) wgpuBindGroupRelease(ds.bindGroup);
@@ -267,6 +268,9 @@ namespace OZZ::rendering::webgpu {
         swapTex.TextureView = wgpuTextureCreateView(surfaceTex.texture, nullptr);
         swapTex.Width     = swapchainWidth;
         swapTex.Height    = swapchainHeight;
+        // Swapchain images are always a color format; the exact enum only needs to be
+        // non-depth so lazy depth resolution never mistakes it for a depth texture.
+        swapTex.Format    = TextureFormat::BGRA8;
         RHITextureHandle colorHandle = texturePool.Allocate(std::move(swapTex));
         currentBackbufferView = texturePool.Get(colorHandle)->TextureView;
 
@@ -346,6 +350,8 @@ namespace OZZ::rendering::webgpu {
         // Reset active pass formats; they will be set below from the actual attachments.
         activePassColorFormat = WGPUTextureFormat_Undefined;
         activePassDepthFormat = WGPUTextureFormat_Undefined;
+        activePassWidth  = 0;
+        activePassHeight = 0;
 
         // Graphics state does not carry across render passes: callers must call
         // SetGraphicsState after each BeginRenderPass, before any draw.
@@ -361,7 +367,11 @@ namespace OZZ::rendering::webgpu {
             if (!tex) continue;
 
             // Capture the first color attachment's format for pipeline key building.
-            if (i == 0) activePassColorFormat = wgpuTextureGetFormat(tex->Texture);
+            if (i == 0) {
+                activePassColorFormat = wgpuTextureGetFormat(tex->Texture);
+                activePassWidth  = tex->Width;
+                activePassHeight = tex->Height;
+            }
 
             WGPURenderPassColorAttachment ca = {};
             ca.view       = tex->TextureView;
@@ -387,6 +397,10 @@ namespace OZZ::rendering::webgpu {
                 {
                     WGPUTextureFormat depFmt = wgpuTextureGetFormat(dTex->Texture);
                     activePassDepthFormat = depFmt;
+                    if (activePassWidth == 0) {
+                        activePassWidth  = dTex->Width;
+                        activePassHeight = dTex->Height;
+                    }
                     bool hasStencil = (depFmt == WGPUTextureFormat_Depth24PlusStencil8 ||
                                        depFmt == WGPUTextureFormat_Depth32FloatStencil8 ||
                                        depFmt == WGPUTextureFormat_Stencil8);
@@ -433,18 +447,30 @@ namespace OZZ::rendering::webgpu {
     void RHIDeviceWebGPU::SetViewport(const RHIFrameContext&, const Viewport& vp) {
         std::lock_guard<std::recursive_mutex> lock(apiMutex);
         if (!activeRenderPassEncoder) return;
+        // Clamp to the pass attachment extent: mid-resize the engine can send a
+        // rect sized for the previous frame, and Dawn invalidates the whole
+        // command buffer on an out-of-bounds viewport.
+        const auto maxW = static_cast<float>(activePassWidth);
+        const auto maxH = static_cast<float>(activePassHeight);
+        const float x = std::clamp(vp.X, 0.0f, maxW);
+        const float y = std::clamp(vp.Y, 0.0f, maxH);
+        const float w = std::min(vp.Width,  maxW - x);
+        const float h = std::min(vp.Height, maxH - y);
+        if (w <= 0.0f || h <= 0.0f) return;
         wgpuRenderPassEncoderSetViewport(activeRenderPassEncoder,
-                                          vp.X, vp.Y, vp.Width, vp.Height,
+                                          x, y, w, h,
                                           vp.MinDepth, vp.MaxDepth);
     }
 
     void RHIDeviceWebGPU::SetScissor(const RHIFrameContext&, const Scissor& sc) {
         std::lock_guard<std::recursive_mutex> lock(apiMutex);
         if (!activeRenderPassEncoder) return;
-        wgpuRenderPassEncoderSetScissorRect(activeRenderPassEncoder,
-                                             static_cast<uint32_t>(sc.X),
-                                             static_cast<uint32_t>(sc.Y),
-                                             sc.Width, sc.Height);
+        // Same clamp rationale as SetViewport.
+        const uint32_t x = std::min(static_cast<uint32_t>(std::max(sc.X, 0)), activePassWidth);
+        const uint32_t y = std::min(static_cast<uint32_t>(std::max(sc.Y, 0)), activePassHeight);
+        const uint32_t w = std::min(sc.Width,  activePassWidth  - x);
+        const uint32_t h = std::min(sc.Height, activePassHeight - y);
+        wgpuRenderPassEncoderSetScissorRect(activeRenderPassEncoder, x, y, w, h);
     }
 
     void RHIDeviceWebGPU::SetGraphicsState(const RHIFrameContext&,
@@ -738,6 +764,47 @@ namespace OZZ::rendering::webgpu {
         auto* bgl = bindGroupLayoutPool.Get(ds->layoutHandle);
         if (!bgl) return;
 
+        // Lazy depth sample-type resolution: for each SampledImage write, inspect the bound
+        // texture's format. If it is a depth format, that binding must be declared
+        // UnfilterableFloat (+ NonFiltering sampler at binding+1); WebGPU rejects a plain
+        // Float sample type against a depth texture at bind-group creation. We rebuild the
+        // WGPUBindGroupLayout in place (same pool slot) the first time we learn this, then
+        // rebuild any pipeline layouts that reference it.
+        bool bglMutated = false;
+        for (const auto& write : writes) {
+            if (write.Type != DescriptorType::SampledImage) continue;
+            const uint32_t b = write.Binding;
+            if (b >= MaxBoundDescriptorSets) continue;
+            auto* tex = texturePool.Get(write.Image.Texture);
+            if (!tex) continue;
+            const bool texIsDepth = IsDepthFormat(tex->Format);
+
+            if (texIsDepth) {
+                if (!bgl->depthResolved[b]) {
+                    // First time we learn this binding samples depth — promote it.
+                    bgl->depthResolved[b] = true;
+                    bglMutated = true;
+                }
+            } else {
+                // Flip-flop guard: a color texture on a binding we already resolved as depth.
+                if (bgl->depthResolved[b]) {
+                    spdlog::error("WebGPU: binding {} previously resolved as a depth texture "
+                                  "is now bound with a color texture; sample-type mismatch",
+                                  b);
+                }
+            }
+        }
+
+        if (bglMutated) {
+            // Rebuild the bind-group layout object in place, reusing the same pool handle.
+            if (bgl->bgl) wgpuBindGroupLayoutRelease(bgl->bgl);
+            bgl->bgl = buildBindGroupLayoutObject(bgl->sourceDesc, bgl->depthResolved);
+            // Rebuild affected pipeline layouts (also in place) so pipelines pick up the
+            // new layout. Note: rebuildPipelineLayoutsUsingDSL re-Get()s bindGroupLayoutPool,
+            // which is fine — the mutated slot already holds the new object.
+            rebuildPipelineLayoutsUsingDSL(ds->layoutHandle);
+        }
+
         if (ds->bindGroup) {
             wgpuBindGroupRelease(ds->bindGroup);
             ds->bindGroup = nullptr;
@@ -790,7 +857,7 @@ namespace OZZ::rendering::webgpu {
         }
 
         WGPUBindGroupDescriptor desc {};
-        desc.layout     = *bgl;
+        desc.layout     = bgl->bgl;
         desc.entries    = entries.data();
         desc.entryCount = entries.size();
         ds->bindGroup = wgpuDeviceCreateBindGroup(device, &desc);
@@ -819,6 +886,7 @@ namespace OZZ::rendering::webgpu {
         RHITextureWebGPU tex {};
         tex.Width   = descriptor.Width;
         tex.Height  = descriptor.Height;
+        tex.Format  = descriptor.Format;
         tex.Texture = wgpuDeviceCreateTexture(device, &desc);
 
         WGPUTextureViewDescriptor viewDesc {};
@@ -936,8 +1004,9 @@ namespace OZZ::rendering::webgpu {
     std::pair<RHIPipelineLayoutHandle, std::set<RHIDescriptorSetLayoutHandle>>
     RHIDeviceWebGPU::CreatePipelineLayout(const RHIPipelineLayoutDescriptor& desc) {
         std::lock_guard<std::recursive_mutex> lock(apiMutex);
-        std::vector<WGPUBindGroupLayout> bgls;
         std::set<RHIDescriptorSetLayoutHandle> outHandles;
+        // Ordered list of the DSL handles as they map to bind-group slots 0..PushConstantSet-1.
+        std::vector<RHIDescriptorSetLayoutHandle> orderedHandles;
 
         // Slot PushConstantSet (3) is reserved for push-constant emulation and is always
         // special-cased below via pushConstantBGL — never build it here via the generic
@@ -947,35 +1016,81 @@ namespace OZZ::rendering::webgpu {
         for (uint32_t i = 0; i < desc.SetCount && i < PushConstantSet; i++) {
             RHIDescriptorSetLayoutHandle h = CreateDescriptorSetLayout(desc.Sets[i]);
             outHandles.insert(h);
-            auto* bgl = bindGroupLayoutPool.Get(h);
-            if (bgl) bgls.push_back(*bgl);
+            orderedHandles.push_back(h);
         }
 
         // Both reflection paths (GLSL and Slang) signal push constants via
         // PushConstantCount; wire up slot PushConstantSet for the emulation buffer.
         const bool hasPushConstants = desc.PushConstantCount > 0;
         if (hasPushConstants && pushConstantBGL) {
-            while (bgls.size() < PushConstantSet) {
+            while (orderedHandles.size() < PushConstantSet) {
                 const RHIDescriptorSetLayoutDescriptor emptySet {};
                 auto h = CreateDescriptorSetLayout(emptySet);
                 outHandles.insert(h);
-                auto* bgl = bindGroupLayoutPool.Get(h);
-                if (bgl) bgls.push_back(*bgl);
+                orderedHandles.push_back(h);
             }
+        }
+
+        WGPUPipelineLayout pl = buildPipelineLayoutFromHandles(orderedHandles, desc);
+
+        return {pipelineLayoutPool.Allocate(std::move(pl)), outHandles};
+    }
+
+    WGPUPipelineLayout RHIDeviceWebGPU::buildPipelineLayoutFromHandles(
+        const std::vector<RHIDescriptorSetLayoutHandle>& dslHandles,
+        const RHIPipelineLayoutDescriptor& desc) {
+        std::vector<WGPUBindGroupLayout> bgls;
+        bgls.reserve(dslHandles.size() + 1);
+        for (const auto& h : dslHandles) {
+            auto* data = bindGroupLayoutPool.Get(h);
+            if (data && data->bgl) bgls.push_back(data->bgl);
+        }
+        // Append the dynamic-offset push-constant BGL at slot PushConstantSet when declared.
+        if (desc.PushConstantCount > 0 && pushConstantBGL) {
             bgls.push_back(pushConstantBGL);
         }
 
         WGPUPipelineLayoutDescriptor plDesc {};
         plDesc.bindGroupLayouts     = bgls.empty() ? nullptr : bgls.data();
         plDesc.bindGroupLayoutCount = bgls.size();
-        WGPUPipelineLayout pl = wgpuDeviceCreatePipelineLayout(device, &plDesc);
-
-        return {pipelineLayoutPool.Allocate(std::move(pl)), outHandles};
+        return wgpuDeviceCreatePipelineLayout(device, &plDesc);
     }
 
-    RHIDescriptorSetLayoutHandle
-    RHIDeviceWebGPU::CreateDescriptorSetLayout(const RHIDescriptorSetLayoutDescriptor& desc) {
-        std::lock_guard<std::recursive_mutex> lock(apiMutex);
+    void RHIDeviceWebGPU::rebuildPipelineLayoutsUsingDSL(RHIDescriptorSetLayoutHandle mutatedHandle) {
+        // For every shader whose descriptor-set-layout handles include the mutated handle,
+        // rebuild its WGPUPipelineLayout in place (same pool slot). The pipeline cache keys
+        // on the WGPUPipelineLayout pointer, so a fresh pointer yields fresh pipelines
+        // automatically; stale cache entries are harmless.
+        shaderPool.ForEach([&](const RHIShaderHandle&, RHIShaderWebGPU& shader) {
+            bool uses = false;
+            for (const auto& h : shader.descriptorSetLayoutHandles) {
+                if (h == mutatedHandle) {
+                    uses = true;
+                    break;
+                }
+            }
+            if (!uses) return;
+
+            // descriptorSetLayoutHandles are stored in set-index / slot order (the order
+            // CreatePipelineLayout allocated them); reuse them directly.
+            WGPUPipelineLayout newPl =
+                buildPipelineLayoutFromHandles(shader.descriptorSetLayoutHandles,
+                                               shader.pipelineLayoutDescriptor);
+            if (!newPl) return;
+
+            // Replace the WGPU object inside the existing pool slot (handle unchanged).
+            if (auto* slot = pipelineLayoutPool.Get(shader.pipelineLayoutHandle)) {
+                if (*slot) wgpuPipelineLayoutRelease(*slot);
+                *slot = newPl;
+            } else {
+                wgpuPipelineLayoutRelease(newPl);
+            }
+        });
+    }
+
+    WGPUBindGroupLayout RHIDeviceWebGPU::buildBindGroupLayoutObject(
+        const RHIDescriptorSetLayoutDescriptor& desc,
+        const std::array<bool, MaxBoundDescriptorSets>& depthResolved) {
         std::vector<WGPUBindGroupLayoutEntry> entries;
         entries.reserve(desc.BindingCount);
 
@@ -996,10 +1111,26 @@ namespace OZZ::rendering::webgpu {
                 case DescriptorType::ReadOnlyStorageBuffer:
                     entry.buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
                     break;
-                case DescriptorType::SampledImage:
-                    entry.texture.sampleType    = WGPUTextureSampleType_Float;
+                case DescriptorType::SampledImage: {
+                    // Default: Float sample type. Lazily promoted to UnfilterableFloat once
+                    // UpdateDescriptorSet observes a depth-format texture bound here
+                    // (depthResolved[Binding] set), rebuilding this layout in place.
+                    bool isDepth = (b.Binding < MaxBoundDescriptorSets) && depthResolved[b.Binding];
+                    entry.texture.sampleType    = isDepth ? WGPUTextureSampleType_UnfilterableFloat
+                                                           : WGPUTextureSampleType_Float;
                     entry.texture.viewDimension = WGPUTextureViewDimension_2D;
-                    break;
+                    entries.push_back(entry);
+                    if (isDepth) {
+                        // A depth-resolved SampledImage gets its paired sampler at binding+1
+                        // demoted to NonFiltering (mirrors the DepthSampledImage case).
+                        WGPUBindGroupLayoutEntry samplerEntry {};
+                        samplerEntry.binding      = b.Binding + 1;
+                        samplerEntry.visibility   = entry.visibility;
+                        samplerEntry.sampler.type = WGPUSamplerBindingType_NonFiltering;
+                        entries.push_back(samplerEntry);
+                    }
+                    continue;
+                }
                 case DescriptorType::Sampler:
                     entry.sampler.type = WGPUSamplerBindingType_Filtering;
                     break;
@@ -1040,9 +1171,28 @@ namespace OZZ::rendering::webgpu {
         WGPUBindGroupLayoutDescriptor bglDesc {};
         bglDesc.entries     = entries.empty() ? nullptr : entries.data();
         bglDesc.entryCount  = entries.size();
-        WGPUBindGroupLayout bgl = wgpuDeviceCreateBindGroupLayout(device, &bglDesc);
+        return wgpuDeviceCreateBindGroupLayout(device, &bglDesc);
+    }
 
-        return bindGroupLayoutPool.Allocate(std::move(bgl));
+    RHIDescriptorSetLayoutHandle
+    RHIDeviceWebGPU::CreateDescriptorSetLayout(const RHIDescriptorSetLayoutDescriptor& desc) {
+        std::lock_guard<std::recursive_mutex> lock(apiMutex);
+
+        BindGroupLayoutData data {};
+        data.sourceDesc = desc;
+        // Idempotence guard: a name-heuristic DepthSampledImage binding is ALREADY built
+        // as UnfilterableFloat here, so mark it resolved up front — the lazy path must not
+        // rebuild it when it later sees the depth texture (depthResolved would be false).
+        for (uint32_t i = 0; i < desc.BindingCount; i++) {
+            const auto& b = desc.Bindings[i];
+            if (b.Count == 0) continue;
+            if (b.Type == DescriptorType::DepthSampledImage && b.Binding < MaxBoundDescriptorSets) {
+                data.depthResolved[b.Binding] = true;
+            }
+        }
+        data.bgl = buildBindGroupLayoutObject(desc, data.depthResolved);
+
+        return bindGroupLayoutPool.Allocate(std::move(data));
     }
 
     // -------------------------------------------------------------------------

@@ -320,6 +320,18 @@ namespace OZZ::rendering::vk {
         // shader code (e.g. camera.proj/view, pc.model) unless overridden here.
         sessionDesc.defaultMatrixLayoutMode = SLANG_MATRIX_LAYOUT_COLUMN_MAJOR;
 
+        // Slang preprocessor macros. The macro descs hold raw c_str pointers into
+        // shaderSources.Defines, which outlives this compile, so no local copy is needed.
+        std::vector<slang::PreprocessorMacroDesc> macros;
+        macros.reserve(shaderSources.Defines.size());
+        for (const auto& def : shaderSources.Defines) {
+            macros.push_back({def.Name.c_str(), def.Value.c_str()});
+        }
+        if (!macros.empty()) {
+            sessionDesc.preprocessorMacros     = macros.data();
+            sessionDesc.preprocessorMacroCount = static_cast<SlangInt>(macros.size());
+        }
+
         slang::ISession* session = nullptr;
         if (SLANG_FAILED(slangSession->createSession(sessionDesc, &session)) || !session) {
             spdlog::error("Slang: failed to create session for SPIR-V compilation");

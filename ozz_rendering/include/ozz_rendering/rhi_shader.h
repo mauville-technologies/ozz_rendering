@@ -6,6 +6,7 @@
 
 #include <filesystem>
 #include <string>
+#include <vector>
 
 #include "ozz_rendering/utils/enums.h"
 
@@ -19,6 +20,13 @@ namespace OZZ::rendering {
         All = 0xFFFFFFFF,
     };
 
+    // A Slang preprocessor macro (name=value). Applied to Slang compile sessions on both
+    // backends; ignored by the GLSL compilation paths.
+    struct ShaderDefine {
+        std::string Name;
+        std::string Value;
+    };
+
     struct ShaderSourceParams {
         std::string Vertex;
         std::string Geometry;
@@ -28,12 +36,18 @@ namespace OZZ::rendering {
         std::string Slang;
         // Legacy: set true to treat Vertex (+Fragment) as Slang source. Prefer `Slang`.
         bool IsSlang = false;
+        // Slang preprocessor macros; ignored by GLSL paths.
+        std::vector<ShaderDefine> Defines;
     };
 
     struct ShaderFileParams {
         std::filesystem::path Vertex;
         std::filesystem::path Geometry;
         std::filesystem::path Fragment;
+        // Whole-module Slang file; takes precedence over Vertex/Geometry/Fragment when non-empty.
+        std::filesystem::path Slang;
+        // Slang preprocessor macros; ignored by GLSL paths.
+        std::vector<ShaderDefine> Defines;
     };
 
 } // namespace OZZ::rendering

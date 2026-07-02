@@ -25,6 +25,16 @@ namespace OZZ::rendering::webgpu {
         RHIDescriptorSetLayoutHandle layoutHandle {};
     };
 
+    // Internal storage for a bind-group layout. Retains the source descriptor and a
+    // per-binding "depth resolved" flag so UpdateDescriptorSet can lazily rebuild the
+    // WGPUBindGroupLayout in place once it learns a SampledImage binding actually samples
+    // a depth-format texture (WebGPU needs UnfilterableFloat + NonFiltering there).
+    struct BindGroupLayoutData {
+        WGPUBindGroupLayout bgl {nullptr};
+        RHIDescriptorSetLayoutDescriptor sourceDesc {};
+        std::array<bool, MaxBoundDescriptorSets> depthResolved {};
+    };
+
     class RHIDeviceWebGPU : public RHIDevice {
     public:
         explicit RHIDeviceWebGPU(const PlatformContext& context);
@@ -113,6 +123,22 @@ namespace OZZ::rendering::webgpu {
         void configureSurface();
         void createDepthTexture();
         void registerShaderLayouts(RHIShaderHandle handle, RHIShaderWebGPU& shader);
+        // Builds a WGPUPipelineLayout from a set of already-created descriptor-set-layout
+        // handles (in set-index order) plus the reflected descriptor (for push constants).
+        // Shared by CreatePipelineLayout and the in-place rebuild after a BGL is mutated.
+        WGPUPipelineLayout buildPipelineLayoutFromHandles(
+            const std::vector<RHIDescriptorSetLayoutHandle>& dslHandles,
+            const RHIPipelineLayoutDescriptor& desc);
+        // After a bind-group layout is rebuilt in place (same pool slot, new WGPU handle),
+        // rebuild every shader's WGPUPipelineLayout that references the mutated DSL handle,
+        // reusing the shader's existing pipelineLayout pool slot.
+        void rebuildPipelineLayoutsUsingDSL(RHIDescriptorSetLayoutHandle mutatedHandle);
+        // Builds the raw WGPUBindGroupLayout for a descriptor. `depthResolved[binding]`
+        // forces a SampledImage binding to be declared UnfilterableFloat with a paired
+        // NonFiltering sampler at binding+1 (WebGPU's depth-texture requirement).
+        WGPUBindGroupLayout buildBindGroupLayoutObject(
+            const RHIDescriptorSetLayoutDescriptor& desc,
+            const std::array<bool, MaxBoundDescriptorSets>& depthResolved);
         WGPURenderPipeline buildPipeline(const PipelineKey& key, const RHIShaderWebGPU& shader);
         // Applies all pending draw state (pipeline, vertex buffer, descriptor sets,
         // push-constant bind group) to the active render pass encoder. Returns false
@@ -158,6 +184,13 @@ namespace OZZ::rendering::webgpu {
         WGPUTextureFormat activePassColorFormat {WGPUTextureFormat_Undefined};
         WGPUTextureFormat activePassDepthFormat {WGPUTextureFormat_Undefined};
 
+        // Extent of the currently-active render pass attachments. Viewport and
+        // scissor are clamped to this: during a window-resize storm the engine can
+        // submit a rect sized for the previous frame, and an oversized rect is a
+        // Dawn validation error that invalidates the whole command buffer.
+        uint32_t activePassWidth  {0};
+        uint32_t activePassHeight {0};
+
         // Pending per-draw state (updated by Set* / Bind* before Draw)
         GraphicsStateDescriptor pendingState {};
         RHIShaderHandle         pendingShaderHandle {};
@@ -193,7 +226,7 @@ namespace OZZ::rendering::webgpu {
         ResourcePool<ShaderTag,              RHIShaderWebGPU>     shaderPool;
         ResourcePool<BufferTag,              RHIBufferWebGPU>     bufferPool;
         ResourcePool<PipelineLayoutTag,      WGPUPipelineLayout>  pipelineLayoutPool;
-        ResourcePool<DescriptorSetLayoutTag, WGPUBindGroupLayout> bindGroupLayoutPool;
+        ResourcePool<DescriptorSetLayoutTag, BindGroupLayoutData> bindGroupLayoutPool;
         ResourcePool<DescriptorSetTag,       DescriptorSetData>   descriptorSetPool;
 
         // Pre-allocated command buffer handles indexed by frame index

@@ -77,6 +77,18 @@ namespace OZZ::rendering {
             }
         }
 
+        // Invokes fn(handle, resource&) for every occupied slot. Holds the pool lock for
+        // the duration, so fn must not call back into this pool's locking methods.
+        void ForEach(const std::function<void(const RHIHandle<Tag>&, ResourceType&)>& fn) {
+            std::lock_guard lock(mutex);
+            for (uint32_t i = 0; i < Slots.size(); ++i) {
+                auto& slot = Slots[i];
+                if (slot.Occupied()) {
+                    fn(RHIHandle<Tag>{.Id = i, .Generation = slot.Generation}, slot.Resource.value());
+                }
+            }
+        }
+
         void Empty() {
             std::lock_guard lock(mutex);
             for (auto& slot : Slots) {

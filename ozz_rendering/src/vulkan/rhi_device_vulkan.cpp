@@ -1941,6 +1941,22 @@ namespace OZZ::rendering::vk {
 
     RHIShaderHandle RHIDeviceVulkan::CreateShader(ShaderFileParams&& shaderFiles) {
         OZZ_PROFILE_FUNCTION;
+
+        // Whole-module Slang file takes precedence: read it into ShaderSourceParams::Slang
+        // and skip the vertex/fragment file-open requirements entirely.
+        if (!shaderFiles.Slang.empty()) {
+            std::ifstream slangFile(shaderFiles.Slang);
+            if (!slangFile.is_open()) {
+                spdlog::error("Failed to open Slang shader file: {}", shaderFiles.Slang.string());
+                return RHIShaderHandle::Null();
+            }
+            std::string slangSource((std::istreambuf_iterator<char>(slangFile)), std::istreambuf_iterator<char>());
+            return CreateShader(ShaderSourceParams {
+                .Slang = slangSource,
+                .Defines = std::move(shaderFiles.Defines),
+            });
+        }
+
         std::ifstream vertexFile(shaderFiles.Vertex);
         std::ifstream fragmentFile(shaderFiles.Fragment);
 
@@ -1963,6 +1979,7 @@ namespace OZZ::rendering::vk {
             .Vertex = vertexSource,
             .Geometry = geometrySource,
             .Fragment = fragmentSource,
+            .Defines = std::move(shaderFiles.Defines),
         });
     }
 
